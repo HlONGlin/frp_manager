@@ -1,5 +1,6 @@
 import copy
 import re
+from urllib.parse import urlparse
 
 
 class ValidationError(ValueError):
@@ -10,6 +11,7 @@ PROTOCOLS = {'tcp', 'udp', 'http', 'https'}
 SERVER_FIELDS = {
     'name',
     'server_addr',
+    'manager_url',
     'server_port',
     'token',
     'dashboard_port',
@@ -38,6 +40,7 @@ DOMAIN_PATTERN = re.compile(r'^[A-Za-z0-9*._,-]{1,255}$')
 FIELD_LABELS = {
     'name': '名称',
     'server_addr': '服务器地址',
+    'manager_url': '回调地址',
     'server_port': '服务端口',
     'token': '令牌',
     'dashboard_port': '仪表盘端口',
@@ -111,6 +114,17 @@ def _as_port(value, field, required=False, default=None):
     return port
 
 
+def _as_manager_url(value, field='manager_url', required=False, default=''):
+    text = _as_text(value, field, required=required, default=default)
+    if not text:
+        return ''
+
+    parsed = urlparse(text)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        raise ValidationError('回调地址格式不正确，需为 http://host[:port] 或 https://host[:port]')
+    return f'{parsed.scheme}://{parsed.netloc}'
+
+
 def _as_bool(value, field, default=True):
     field_name = _label(field)
     if value is None:
@@ -136,6 +150,7 @@ def validate_server_create(payload, _local_ip):
         'name': _as_text(payload.get('name'), 'name', default='FRPS服务器', pattern=NAME_PATTERN),
         # 服务器地址由子服务器部署后自动上报，创建时默认留空。
         'server_addr': _as_text(payload.get('server_addr'), 'server_addr', default='', pattern=HOST_PATTERN),
+        'manager_url': _as_manager_url(payload.get('manager_url'), default=''),
         'server_port': _as_port(payload.get('server_port'), 'server_port', required=True),
         'token': _as_text(payload.get('token'), 'token', required=True, pattern=TOKEN_PATTERN),
         'dashboard_port': _as_port(payload.get('dashboard_port'), 'dashboard_port', default=7500),
@@ -157,6 +172,8 @@ def validate_server_update(payload):
         updates['name'] = _as_text(payload.get('name'), 'name', required=True, pattern=NAME_PATTERN)
     if 'server_addr' in payload:
         updates['server_addr'] = _as_text(payload.get('server_addr'), 'server_addr', required=True, pattern=HOST_PATTERN)
+    if 'manager_url' in payload:
+        updates['manager_url'] = _as_manager_url(payload.get('manager_url'), required=False, default='')
     if 'server_port' in payload:
         updates['server_port'] = _as_port(payload.get('server_port'), 'server_port', required=True)
     if 'token' in payload:

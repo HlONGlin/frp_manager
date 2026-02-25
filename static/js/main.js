@@ -351,6 +351,7 @@ function openFRPSModal(server = null) {
         idInput.value = server.id || '';
         form.name.value = server.name || '';
         form.server_port.value = server.server_port || 7000;
+        form.manager_url.value = server.manager_url || '';
         form.token.value = server.token || '';
         form.dashboard_port.value = server.dashboard_port || 7500;
         form.vhost_http_port.value = server.vhost_http_port || 80;
@@ -361,6 +362,7 @@ function openFRPSModal(server = null) {
         title.textContent = '添加 FRPS 服务器';
         form.reset();
         idInput.value = '';
+        form.manager_url.value = '';
         form.token.value = '';
         form.server_port.value = 7000;
         form.dashboard_port.value = 7500;
@@ -428,6 +430,7 @@ async function saveFRPSServer(event) {
     const payload = {
         name: form.name.value.trim(),
         server_port: asInt(form.server_port.value),
+        manager_url: form.manager_url.value.trim(),
         dashboard_port: asInt(form.dashboard_port.value),
         dashboard_user: form.dashboard_user.value.trim(),
         dashboard_pwd: form.dashboard_pwd.value,
@@ -449,7 +452,7 @@ async function saveFRPSServer(event) {
         await loadServers(false);
 
         if (!serverId && data.deploy_command) {
-            showDeployModal(data.server, data.deploy_command);
+            showDeployModal(data.server, data.deploy_command, data.manager_urls);
         }
     } catch (error) {
         showToast(error.message || '保存失败', 'error');
@@ -552,13 +555,13 @@ async function generateFRPC(serverId) {
 async function showFRPSDeployCommand(serverId) {
     try {
         const data = await apiRequest(`/api/frps/server/${serverId}/deploy`);
-        showDeployModal(data.server, data.command);
+        showDeployModal(data.server, data.command, data.manager_urls);
     } catch (error) {
         showToast(error.message || '获取部署命令失败', 'error');
     }
 }
 
-function showDeployModal(server, command) {
+function showDeployModal(server, command, managerUrls = []) {
     const code = document.querySelector('#deploy-command code');
     if (code) {
         code.textContent = command || '';
@@ -566,6 +569,7 @@ function showDeployModal(server, command) {
     const deployPort = document.getElementById('deploy-port');
     const deployToken = document.getElementById('deploy-token');
     const deployDashboard = document.getElementById('deploy-dashboard');
+    const deployManagerUrls = document.getElementById('deploy-manager-urls');
     if (deployPort) {
         deployPort.textContent = server?.server_port || '';
     }
@@ -574,6 +578,10 @@ function showDeployModal(server, command) {
     }
     if (deployDashboard) {
         deployDashboard.textContent = server?.dashboard_port || '';
+    }
+    if (deployManagerUrls) {
+        const urls = Array.isArray(managerUrls) ? managerUrls.filter((item) => String(item || '').trim()) : [];
+        deployManagerUrls.textContent = urls.length ? urls.join(' , ') : '未配置';
     }
     openModal('deploy-modal');
     triggerFastStatusSync();

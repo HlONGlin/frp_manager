@@ -92,6 +92,8 @@ FRP_MANAGER_SECRET_KEY=${secret}
 FRP_STATUS_TIMEOUT=1.0
 FRP_STATUS_CACHE_TTL=20
 FRP_STATUS_WORKERS=16
+FRP_REPORT_ONLINE_TTL=90
+FRP_MANAGER_PUBLIC_URL=
 EOF
     return
   fi
@@ -107,6 +109,12 @@ EOF
   fi
   if ! grep -qE '^FLASK_DEBUG=' "$ENV_FILE"; then
     printf '\nFLASK_DEBUG=0\n' >>"$ENV_FILE"
+  fi
+  if ! grep -qE '^FRP_REPORT_ONLINE_TTL=' "$ENV_FILE"; then
+    printf '\nFRP_REPORT_ONLINE_TTL=90\n' >>"$ENV_FILE"
+  fi
+  if ! grep -qE '^FRP_MANAGER_PUBLIC_URL=' "$ENV_FILE"; then
+    printf '\nFRP_MANAGER_PUBLIC_URL=\n' >>"$ENV_FILE"
   fi
 }
 

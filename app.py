@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 import os
 import re
 import secrets
@@ -7,6 +8,7 @@ import socket
 import sys
 import threading
 import time
+from urllib.parse import urlparse
 from werkzeug.security import check_password_hash, generate_password_hash
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +46,7 @@ from utils.validators import (
 STATUS_TIMEOUT = float(os.environ.get('FRP_STATUS_TIMEOUT', '1.0'))
 STATUS_CACHE_TTL = float(os.environ.get('FRP_STATUS_CACHE_TTL', '20'))
 STATUS_WORKERS = int(os.environ.get('FRP_STATUS_WORKERS', '16'))
+REPORT_ONLINE_TTL = float(os.environ.get('FRP_REPORT_ONLINE_TTL', '90'))
 SESSION_USER_KEY = 'admin_user'
 USERNAME_PATTERN = re.compile(r'^[A-Za-z0-9_.-]{3,32}$')
 MIN_PASSWORD_LENGTH = 8
@@ -116,8 +119,75 @@ def get_local_ip():
         return "127.0.0.1"
 
 
-def get_manager_base_url():
-    return request.url_root.rstrip('/')
+def normalize_base_url(raw_url):
+    text = str(raw_url or '').strip().rstrip('/')
+    if not text:
+        return ''
+    parsed = urlparse(text)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        return ''
+    return f'{parsed.scheme}://{parsed.netloc}'
+
+
+def get_request_base_url():
+    forwarded_host = str(request.headers.get('X-Forwarded-Host', '')).split(',')[0].strip()
+    if forwarded_host:
+        forwarded_proto = str(request.headers.get('X-Forwarded-Proto', '')).split(',')[0].strip()
+        scheme = forwarded_proto or request.scheme or 'http'
+        return normalize_base_url(f'{scheme}://{forwarded_host}')
+    return normalize_base_url(request.url_root)
+
+
+def get_manager_base_urls(server=None):
+    candidates = []
+
+    if isinstance(server, dict):
+        candidates.append(server.get('manager_url'))
+
+    public_url_env = str(os.environ.get('FRP_MANAGER_PUBLIC_URL', '')).strip()
+    if public_url_env:
+        candidates.extend([item for item in re.split(r'[\s,]+', public_url_env) if item])
+
+    candidates.append(get_request_base_url())
+
+    normalized = []
+    seen = set()
+    for candidate in candidates:
+        base_url = normalize_base_url(candidate)
+        if not base_url or base_url in seen:
+            continue
+        seen.add(base_url)
+        normalized.append(base_url)
+    return normalized
+
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+
+
+def parse_report_timestamp(raw_timestamp):
+    text = str(raw_timestamp or '').strip()
+    if not text:
+        return None
+    if text.endswith('Z'):
+        text = f'{text[:-1]}+00:00'
+    try:
+        timestamp = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
+
+
+def has_recent_report(last_report_at):
+    if REPORT_ONLINE_TTL <= 0:
+        return False
+    timestamp = parse_report_timestamp(last_report_at)
+    if not timestamp:
+        return False
+    age_seconds = (datetime.now(timezone.utc) - timestamp).total_seconds()
+    return age_seconds <= REPORT_ONLINE_TTL
 
 
 def normalize_server_addr(server_addr):
@@ -128,7 +198,9 @@ def has_server_address(server_addr):
     return bool(normalize_server_addr(server_addr))
 
 
-def check_frps_status(server_addr, server_port):
+def check_frps_status(server_addr, server_port, last_report_at=None):
+    if has_recent_report(last_report_at):
+        return 'online'
     host = normalize_server_addr(server_addr)
     if not host:
         return 'pending'
@@ -183,6 +255,8 @@ def attach_server_statuses(servers, refresh=False):
             cached_status = get_cached_status(server_id)
             if cached_status:
                 server['status'] = cached_status
+            elif has_recent_report(server.get('last_report_at')):
+                server['status'] = 'online'
             elif not has_server_address(server.get('server_addr')):
                 server['status'] = 'pending'
             else:
@@ -193,7 +267,12 @@ def attach_server_statuses(servers, refresh=False):
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
         futures = {}
         for server in servers:
-            future = pool.submit(check_frps_status, server.get('server_addr'), server.get('server_port'))
+            future = pool.submit(
+                check_frps_status,
+                server.get('server_addr'),
+                server.get('server_port'),
+                server.get('last_report_at'),
+            )
             futures[future] = server
 
         for future in as_completed(futures):
@@ -368,11 +447,13 @@ def add_frps():
     if not str(raw_payload.get('token', '')).strip():
         raw_payload['token'] = generate_server_token()
     payload = validate_server_create(raw_payload, get_local_ip())
+    payload['last_report_at'] = ''
     server = add_frps_server(payload)
     clear_cached_status(str(server.get('id', '')))
-    deploy_command = build_frps_deploy_command(server, manager_base_url=get_manager_base_url())
+    manager_urls = get_manager_base_urls(server)
+    deploy_command = build_frps_deploy_command(server, manager_base_urls=manager_urls)
     return success_response(
-        {'server': server, 'deploy_command': deploy_command, 'local_ip': get_local_ip()},
+        {'server': server, 'deploy_command': deploy_command, 'local_ip': get_local_ip(), 'manager_urls': manager_urls},
         status_code=201,
     )
 
@@ -382,7 +463,7 @@ def get_frps(server_id):
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
-    server['status'] = check_frps_status(server.get('server_addr'), server.get('server_port'))
+    server['status'] = check_frps_status(server.get('server_addr'), server.get('server_port'), server.get('last_report_at'))
     set_cached_status(str(server.get('id', '')), server['status'])
     return jsonify(server)
 
@@ -392,7 +473,12 @@ def get_frps_deploy(server_id):
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
-    return success_response({'command': build_frps_deploy_command(server, manager_base_url=get_manager_base_url()), 'server': server})
+    manager_urls = get_manager_base_urls(server)
+    return success_response({
+        'command': build_frps_deploy_command(server, manager_base_urls=manager_urls),
+        'server': server,
+        'manager_urls': manager_urls,
+    })
 
 
 @app.route('/api/frps/server/<server_id>', methods=['PUT'])
@@ -419,7 +505,7 @@ def check_frps(server_id):
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
-    status = check_frps_status(server.get('server_addr'), server.get('server_port'))
+    status = check_frps_status(server.get('server_addr'), server.get('server_port'), server.get('last_report_at'))
     set_cached_status(str(server.get('id', '')), status)
     return success_response({'status': status})
 
@@ -449,6 +535,11 @@ def report_frps(server_id):
 
     if updates_payload:
         updates = validate_server_update(updates_payload)
+        updates['last_report_at'] = utc_now_iso()
+        update_frps_server(server_id, updates)
+        server.update(updates)
+    else:
+        updates = {'last_report_at': utc_now_iso()}
         update_frps_server(server_id, updates)
         server.update(updates)
 
@@ -457,6 +548,7 @@ def report_frps(server_id):
         'server_id': server_id,
         'server_addr': server.get('server_addr'),
         'server_port': server.get('server_port'),
+        'last_report_at': server.get('last_report_at'),
         'status': 'online',
     })
 

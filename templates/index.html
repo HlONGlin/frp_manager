@@ -96,6 +96,11 @@
                     <p class="hint">服务器地址会在子服务器执行 FRPS 一键部署后自动识别，无需手动填写。</p>
                 </div>
                 <div class="form-group">
+                    <label>回调地址（可选）</label>
+                    <input type="text" name="manager_url" placeholder="https://panel.example.com">
+                    <p class="hint">用于子服务器回报状态；不填则自动使用当前访问地址与全局回调地址。</p>
+                </div>
+                <div class="form-group">
                     <label>连接令牌 (Token，自动生成)</label>
                     <input type="text" name="token" placeholder="保存后自动生成" readonly>
                     <p class="hint">Token 会自动生成并同步用于 FRPS/FRPC，避免手动不一致。</p>
@@ -235,6 +240,7 @@
                     <p><strong>服务端口:</strong> <span id="deploy-port"></span></p>
                     <p><strong>Token:</strong> <span id="deploy-token"></span></p>
                     <p><strong>仪表盘端口:</strong> <span id="deploy-dashboard"></span></p>
+                    <p><strong>回报地址候选:</strong> <span id="deploy-manager-urls"></span></p>
                 </div>
                 <button class="btn btn-primary copy-btn" id="copy-deploy-command">
                     <span class="btn-icon">📋</span> 复制命令

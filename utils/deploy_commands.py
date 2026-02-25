@@ -35,6 +35,10 @@ def _escape_for_batch_echo(text):
     return escaped
 
 
+def _shell_single_quote(text):
+    return "'" + _value(text).replace("'", "'\"'\"'") + "'"
+
+
 def _build_proxy_section(port):
     lines = [
         f'[{_safe_proxy_name(port.get("name"))}]',
@@ -80,21 +84,95 @@ def build_frpc_config(server, ports):
     return '\n'.join(lines).rstrip() + '\n'
 
 
-def build_frps_deploy_command(server, manager_base_url=None):
-    callback_block = ''
-    if manager_base_url:
-        callback_block = f"""
-MANAGER_URL='{_value(manager_base_url).rstrip('/')}'
-FRPS_SERVER_ID='{_value(server.get('id'))}'
+def build_frps_deploy_command(server, manager_base_urls=None):
+    normalized_urls = []
+    seen_urls = set()
 
-if command -v curl >/dev/null 2>&1; then
-    curl -s -X POST "$MANAGER_URL/api/frps/server/$FRPS_SERVER_ID/report" \\
-        -H "Content-Type: application/json" \\
-        -d '{{"token":"'"$FRPS_TOKEN"'","server_addr":"'"$REPORTED_IP"'","server_port":{_value(server.get('server_port'))}}}' \\
-        >/dev/null 2>&1 || true
-    echo "已向管理面板回报 FRPS 地址: $REPORTED_IP"
+    if isinstance(manager_base_urls, str):
+        manager_base_urls = [manager_base_urls]
+
+    for raw_url in manager_base_urls or []:
+        url = _value(raw_url).rstrip('/')
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        normalized_urls.append(url)
+
+    callback_block = ''
+    callback_echo_line = 'echo "未配置回报地址：部署后请在面板中补充可访问的回调地址。"'
+    if normalized_urls:
+        urls_literal = '\n'.join(normalized_urls)
+        callback_echo_line = f'echo "回报地址候选: {", ".join(normalized_urls)}"'
+        callback_block = f"""
+FRPS_SERVER_ID={_shell_single_quote(server.get('id'))}
+
+MANAGER_URL_LIST=$(cat <<'URLS'
+{urls_literal}
+URLS
+)
+
+report_to_manager() {{
+    local manager_url endpoint payload
+    payload='{{"token":"'"$FRPS_TOKEN"'","server_addr":"'"$REPORTED_IP"'","server_port":{_value(server.get('server_port'))}}}'
+
+    while IFS= read -r manager_url; do
+        [ -z "$manager_url" ] && continue
+        endpoint="${{manager_url}}/api/frps/server/${{FRPS_SERVER_ID}}/report"
+
+        if command -v curl >/dev/null 2>&1; then
+            if curl -fsS --max-time 5 -X POST "$endpoint" \\
+                -H "Content-Type: application/json" \\
+                -d "$payload" >/dev/null 2>&1; then
+                echo "已向管理面板回报 FRPS 地址: $manager_url"
+                return 0
+            fi
+            continue
+        fi
+
+        if command -v wget >/dev/null 2>&1; then
+            if wget -qO- --timeout=5 \\
+                --header="Content-Type: application/json" \\
+                --post-data="$payload" "$endpoint" >/dev/null 2>&1; then
+                echo "已向管理面板回报 FRPS 地址: $manager_url"
+                return 0
+            fi
+        fi
+    done <<< "$MANAGER_URL_LIST"
+    return 1
+}}
+
+start_reporter() {{
+    local pid_file="/tmp/frps_report_${{FRPS_SERVER_ID}}.pid"
+    local log_file="/tmp/frps_report_${{FRPS_SERVER_ID}}.log"
+    local report_interval="${{REPORT_INTERVAL:-30}}"
+
+    if [[ -f "$pid_file" ]]; then
+        local old_pid=""
+        old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+        if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+            kill "$old_pid" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    (
+        while true; do
+            sleep "$report_interval"
+            if command -v pgrep >/dev/null 2>&1 && ! pgrep -x frps >/dev/null 2>&1; then
+                exit 0
+            fi
+            report_to_manager || true
+        done
+    ) >"$log_file" 2>&1 &
+    echo "$!" >"$pid_file"
+}}
+
+if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+    if ! report_to_manager; then
+        echo "警告: 首次回报失败，已启动后台重试。请确认回报地址可从 FRPS 服务器访问。"
+    fi
+    start_reporter
 else
-    echo "未检测到 curl，无法自动回报地址到管理面板。"
+    echo "警告: 未检测到 curl/wget，无法自动回报状态。"
 fi
 """
 
@@ -103,7 +181,7 @@ mkdir -p /opt/frp && cd /opt/frp
 wget -O frps.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME}
 tar -xzf frps.tar.gz
 cd {LINUX_FOLDER_NAME}
-FRPS_TOKEN='{_value(server.get('token'))}'
+FRPS_TOKEN={_shell_single_quote(server.get('token'))}
 
 REPORTED_IP="$(hostname -I 2>/dev/null | awk '{{print $1}}')"
 if command -v curl >/dev/null 2>&1; then
@@ -153,6 +231,7 @@ echo "FRPS 服务器地址: $REPORTED_IP"
 echo "仪表盘地址: http://$REPORTED_IP:{_value(server.get('dashboard_port'))}"
 echo "用户名: {_value(server.get('dashboard_user'))}"
 echo "密码: {_value(server.get('dashboard_pwd'))}"
+{callback_echo_line}
 {callback_block}
 """
 
@@ -174,8 +253,6 @@ def build_frpc_deploy_command(server, port, system='linux'):
         for line in config.splitlines():
             if line:
                 windows_echo_lines.append(f"echo {_escape_for_batch_echo(line)}")
-            else:
-                windows_echo_lines.append("echo(")
         windows_echo_config = '\n'.join(windows_echo_lines)
 
         if protocol in {'http', 'https'}:
