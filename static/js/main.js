@@ -361,7 +361,7 @@ function openFRPSModal(server = null) {
         title.textContent = '添加 FRPS 服务器';
         form.reset();
         idInput.value = '';
-        form.token.value = generateToken();
+        form.token.value = '';
         form.server_port.value = 7000;
         form.dashboard_port.value = 7500;
         form.vhost_http_port.value = 80;
@@ -428,13 +428,16 @@ async function saveFRPSServer(event) {
     const payload = {
         name: form.name.value.trim(),
         server_port: asInt(form.server_port.value),
-        token: form.token.value.trim(),
         dashboard_port: asInt(form.dashboard_port.value),
         dashboard_user: form.dashboard_user.value.trim(),
         dashboard_pwd: form.dashboard_pwd.value,
         vhost_http_port: asInt(form.vhost_http_port.value),
         vhost_https_port: asInt(form.vhost_https_port.value),
     };
+    const tokenValue = form.token.value.trim();
+    if (tokenValue) {
+        payload.token = tokenValue;
+    }
 
     try {
         const data = await apiRequest(serverId ? `/api/frps/server/${serverId}` : '/api/frps/server', {
@@ -671,15 +674,6 @@ function findServer(serverId) {
 function findPort(server, portId) {
     const ports = Array.isArray(server?.ports) ? server.ports : [];
     return ports.find((port) => String(port.id) === String(portId)) || null;
-}
-
-function generateToken(length = 32) {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let token = '';
-    for (let i = 0; i < length; i += 1) {
-        token += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return token;
 }
 
 function asInt(value) {

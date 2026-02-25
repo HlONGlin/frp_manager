@@ -2,6 +2,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
+import secrets
 import socket
 import sys
 import threading
@@ -47,6 +48,8 @@ SESSION_USER_KEY = 'admin_user'
 USERNAME_PATTERN = re.compile(r'^[A-Za-z0-9_.-]{3,32}$')
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
+TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+TOKEN_LENGTH = 32
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FRP_MANAGER_SECRET_KEY') or os.urandom(32).hex()
@@ -98,6 +101,10 @@ def validate_auth_payload(username, password, confirm_password=None):
         raise ValidationError('两次输入的密码不一致')
 
     return normalized_username, normalized_password
+
+
+def generate_server_token(length=TOKEN_LENGTH):
+    return ''.join(secrets.choice(TOKEN_ALPHABET) for _ in range(length))
 
 
 def get_local_ip():
@@ -357,7 +364,10 @@ def frps_servers_list():
 
 @app.route('/api/frps/server', methods=['POST'])
 def add_frps():
-    payload = validate_server_create(parse_json_body(), get_local_ip())
+    raw_payload = parse_json_body()
+    if not str(raw_payload.get('token', '')).strip():
+        raw_payload['token'] = generate_server_token()
+    payload = validate_server_create(raw_payload, get_local_ip())
     server = add_frps_server(payload)
     clear_cached_status(str(server.get('id', '')))
     deploy_command = build_frps_deploy_command(server, manager_base_url=get_manager_base_url())

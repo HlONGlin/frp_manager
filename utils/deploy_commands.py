@@ -75,7 +75,6 @@ def build_frps_deploy_command(server, manager_base_url=None):
         callback_block = f"""
 MANAGER_URL='{_value(manager_base_url).rstrip('/')}'
 FRPS_SERVER_ID='{_value(server.get('id'))}'
-FRPS_TOKEN='{_value(server.get('token'))}'
 
 if command -v curl >/dev/null 2>&1; then
     curl -s -X POST "$MANAGER_URL/api/frps/server/$FRPS_SERVER_ID/report" \\
@@ -93,6 +92,7 @@ mkdir -p /opt/frp && cd /opt/frp
 wget -O frps.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME}
 tar -xzf frps.tar.gz
 cd {LINUX_FOLDER_NAME}
+FRPS_TOKEN='{_value(server.get('token'))}'
 
 REPORTED_IP="$(hostname -I 2>/dev/null | awk '{{print $1}}')"
 if command -v curl >/dev/null 2>&1; then
@@ -105,7 +105,18 @@ if [ -z "$REPORTED_IP" ]; then
     REPORTED_IP="127.0.0.1"
 fi
 
-cat > frps.ini << 'EOF'
+if command -v pgrep >/dev/null 2>&1 && pgrep -x frps >/dev/null 2>&1; then
+    echo "检测到已有 FRPS 进程，正在停止旧进程..."
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -x frps || true
+        sleep 1
+    else
+        echo "未检测到 pkill，无法自动停止旧 FRPS，请手动停止后重试。"
+        exit 1
+    fi
+fi
+
+cat > frps.ini << EOF
 [common]
 bind_port = {_value(server.get('server_port'))}
 vhost_http_port = {_value(server.get('vhost_http_port'))}
@@ -113,11 +124,18 @@ vhost_https_port = {_value(server.get('vhost_https_port'))}
 dashboard_port = {_value(server.get('dashboard_port'))}
 dashboard_user = {_value(server.get('dashboard_user'))}
 dashboard_pwd = {_value(server.get('dashboard_pwd'))}
-token = {_value(server.get('token'))}
+token = $FRPS_TOKEN
 allow_ports = 2000-30000
 EOF
 
-nohup ./frps -c frps.ini >/dev/null 2>&1 &
+nohup ./frps -c frps.ini >/tmp/frps.log 2>&1 &
+sleep 1
+
+if command -v pgrep >/dev/null 2>&1 && ! pgrep -x frps >/dev/null 2>&1; then
+    echo "FRPS 启动失败，请检查 /tmp/frps.log"
+    tail -n 30 /tmp/frps.log || true
+    exit 1
+fi
 
 echo "FRPS 部署完成！"
 echo "FRPS 服务器地址: $REPORTED_IP"

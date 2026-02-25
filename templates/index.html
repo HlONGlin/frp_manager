@@ -96,8 +96,9 @@
                     <p class="hint">服务器地址会在子服务器执行 FRPS 一键部署后自动识别，无需手动填写。</p>
                 </div>
                 <div class="form-group">
-                    <label>连接令牌 (Token)</label>
-                    <input type="text" name="token" required>
+                    <label>连接令牌 (Token，自动生成)</label>
+                    <input type="text" name="token" placeholder="保存后自动生成" readonly>
+                    <p class="hint">Token 会自动生成并同步用于 FRPS/FRPC，避免手动不一致。</p>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
