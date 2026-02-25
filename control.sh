@@ -35,11 +35,11 @@ log() {
 }
 
 warn() {
-  printf '[%s] WARN: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+  printf '[%s] 警告: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
 }
 
 die() {
-  printf '[%s] ERROR: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+  printf '[%s] 错误: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
   exit 1
 }
 
@@ -59,7 +59,7 @@ detect_pkg_manager() {
 
 require_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    die "Please run with root privileges: sudo bash control.sh"
+    die "请使用 root 权限运行：sudo bash control.sh"
   fi
 }
 
@@ -70,7 +70,7 @@ ensure_git() {
 
   local pm
   pm="$(detect_pkg_manager)"
-  warn "git not found, trying to install with package manager: $pm"
+  warn "未检测到 git，尝试通过包管理器安装：$pm"
 
   case "$pm" in
     apt)
@@ -83,7 +83,7 @@ ensure_git() {
     zypper) zypper --non-interactive install git ;;
     pacman) pacman -Sy --noconfirm git ;;
     apk) apk add --no-cache git ;;
-    *) die "git not found, and package manager is unsupported. Install git manually first." ;;
+    *) die "未检测到 git，且当前包管理器不受支持，请先手动安装 git。" ;;
   esac
 }
 
@@ -159,8 +159,8 @@ sync_repo_to_bootstrap_dir() {
   require_root
   ensure_git
 
-  log "Bootstrap mode: using repository directory $BOOTSTRAP_DIR"
-  log "Syncing repository to $BOOTSTRAP_DIR (branch: $BRANCH)"
+  log "引导模式：使用仓库目录 $BOOTSTRAP_DIR"
+  log "正在同步仓库到 $BOOTSTRAP_DIR（分支：$BRANCH）"
 
   mkdir -p "$(dirname "$BOOTSTRAP_DIR")"
   if [[ -d "$BOOTSTRAP_DIR/.git" ]]; then
@@ -172,18 +172,18 @@ sync_repo_to_bootstrap_dir() {
     fi
 
     if [[ "$repo_state" -eq 2 ]]; then
-      die "Unable to inspect repository state for $BOOTSTRAP_DIR."
+      die "无法检查仓库状态：$BOOTSTRAP_DIR"
     elif [[ "$repo_state" -eq 0 && "$BOOTSTRAP_FORCE_UPDATE" != "1" ]]; then
       BOOTSTRAP_FORCE_UPDATE="1"
-      warn "Local changes detected, auto-confirm force sync with preservation of config.env and frp_manager/ data."
+      warn "检测到本地改动，已自动开启强制同步（保留 config.env 与 frp_manager/config.json）。"
     fi
 
     if ! sync_repo_to_origin "$BOOTSTRAP_DIR"; then
-      die "Repository sync failed."
+      die "仓库同步失败。"
     fi
   else
     if [[ -e "$BOOTSTRAP_DIR" ]] && [[ -n "$(ls -A "$BOOTSTRAP_DIR" 2>/dev/null || true)" ]]; then
-      die "Bootstrap target directory is not empty: $BOOTSTRAP_DIR"
+      die "引导目标目录非空：$BOOTSTRAP_DIR"
     fi
     git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$BOOTSTRAP_DIR"
   fi
@@ -214,7 +214,7 @@ service_restart() {
     systemd) systemctl restart "$SERVICE_NAME" ;;
     openrc) rc-service "$SERVICE_NAME" restart ;;
     sysv) service "$SERVICE_NAME" restart ;;
-    *) die "No supported service manager found." ;;
+    *) die "未找到受支持的服务管理器。" ;;
   esac
 }
 
@@ -223,7 +223,7 @@ service_stop() {
     systemd) systemctl stop "$SERVICE_NAME" ;;
     openrc) rc-service "$SERVICE_NAME" stop ;;
     sysv) service "$SERVICE_NAME" stop ;;
-    *) die "No supported service manager found." ;;
+    *) die "未找到受支持的服务管理器。" ;;
   esac
 }
 
@@ -232,7 +232,7 @@ service_status() {
     systemd) systemctl status "$SERVICE_NAME" --no-pager ;;
     openrc) rc-service "$SERVICE_NAME" status ;;
     sysv) service "$SERVICE_NAME" status ;;
-    *) die "No supported service manager found." ;;
+    *) die "未找到受支持的服务管理器。" ;;
   esac
 }
 
@@ -247,19 +247,19 @@ service_is_running() {
 
 project_status_text() {
   if service_is_running; then
-    echo "running"
+    echo "运行中"
     return
   fi
 
   if [[ "$?" -ne 1 ]]; then
-    echo "unknown"
+    echo "未知"
     return
   fi
 
   if is_bootstrap_mode; then
-    echo "not deployed"
+    echo "未部署"
   else
-    echo "stopped"
+    echo "已停止"
   fi
 }
 
@@ -280,7 +280,7 @@ pick_python_bin() {
     echo "python"
     return
   fi
-  die "python is not available"
+  die "未检测到 Python 运行环境。"
 }
 
 set_env_key() {
@@ -361,14 +361,14 @@ show_access_urls() {
   public_ip="$(detect_public_ip)"
 
   echo "----------------------------------------"
-  echo "Service: $SERVICE_NAME"
-  echo "Port: $port"
-  echo "Local URL:  http://${local_ip}:${port}/"
+  echo "服务名：$SERVICE_NAME"
+  echo "端口：$port"
+  echo "内网地址：http://${local_ip}:${port}/"
   if [[ -n "$public_ip" && "$public_ip" != "$local_ip" ]]; then
-    echo "Public URL: http://${public_ip}:${port}/"
+    echo "公网地址：http://${public_ip}:${port}/"
   fi
-  echo "First setup: http://${local_ip}:${port}/setup"
-  echo "Login page:  http://${local_ip}:${port}/login"
+  echo "首次初始化：http://${local_ip}:${port}/setup"
+  echo "登录页面：http://${local_ip}:${port}/login"
   echo "----------------------------------------"
 }
 
@@ -378,10 +378,10 @@ show_logs() {
       journalctl -u "$SERVICE_NAME" -n 120 --no-pager
       ;;
     openrc|sysv)
-      warn "Log tail via control script is not implemented for this service manager."
+      warn "当前服务管理器暂不支持通过控制脚本查看日志。"
       ;;
     *)
-      warn "No supported service manager found."
+      warn "未找到受支持的服务管理器。"
       ;;
   esac
 }
@@ -397,7 +397,7 @@ import sys
 sys.path.insert(0, r"${APP_DIR}")
 from utils.config_manager import clear_admin_credentials
 clear_admin_credentials()
-print("Admin credentials reset. Open /setup to initialize again.")
+print("管理员账号已重置，请重新访问 /setup 完成初始化。")
 PY
 
   if service_is_running; then
@@ -414,23 +414,23 @@ show_menu() {
   status_text="$(project_status_text)"
 
   echo "=================================="
-  echo " FRP Manager Controller"
-  echo " Status: $status_text"
+  echo " FRP 管理面板控制器"
+  echo " 当前状态：$status_text"
   echo "=================================="
   if [[ "$bootstrap_mode" -eq 1 ]]; then
-    echo "1) Deploy environment (clone + install)"
+    echo "1) 部署环境（拉取仓库并安装）"
   else
-    echo "1) Install or update"
+    echo "1) 安装或更新"
   fi
-  echo "2) Uninstall service and remove files"
-  echo "3) Restart service"
-  echo "4) Stop service"
-  echo "5) Show service status and access URLs"
-  echo "6) Change panel port"
-  echo "7) Show access URLs only"
-  echo "8) Show recent logs"
-  echo "9) Reset admin credentials (re-run setup)"
-  echo "0) Exit"
+  echo "2) 卸载服务并删除文件"
+  echo "3) 重启服务"
+  echo "4) 停止服务"
+  echo "5) 查看服务状态与访问地址"
+  echo "6) 修改面板端口"
+  echo "7) 仅显示访问地址"
+  echo "8) 查看最近日志"
+  echo "9) 重置管理员账号（重新初始化）"
+  echo "0) 退出"
   echo "----------------------------------"
 }
 
@@ -453,7 +453,7 @@ prompt_choice() {
 
 require_deployed_env() {
   if is_bootstrap_mode; then
-    warn "Current run is bootstrap mode, please run option 1 first."
+    warn "当前为引导模式，请先执行 1) 部署环境。"
     return 1
   fi
   return 0
@@ -475,31 +475,31 @@ do_install() {
 do_uninstall() {
   require_root
   local confirm=""
-  if ! prompt_choice confirm "Confirm uninstall and remove all project files? [y/N]: "; then
-    warn "Input not received."
+  if ! prompt_choice confirm "确认卸载并删除全部项目文件？[y/N]："; then
+    warn "未读取到输入。"
     return
   fi
   confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')"
   if [[ "$confirm" != "y" && "$confirm" != "yes" ]]; then
-    echo "Canceled."
+    echo "已取消。"
     return
   fi
   bash "$APP_DIR/uninstall.sh"
-  echo "Uninstalled."
+  echo "卸载完成。"
   exit 0
 }
 
 do_restart() {
   require_root
   service_restart
-  echo "Service restarted."
+  echo "服务已重启。"
   show_access_urls
 }
 
 do_stop() {
   require_root
   service_stop
-  echo "Service stopped."
+  echo "服务已停止。"
 }
 
 do_status() {
@@ -513,46 +513,46 @@ do_change_port() {
   local current_port new_port
   current_port="$(get_port)"
 
-  if ! prompt_choice new_port "Input new panel port (1-65535, 0 to cancel): "; then
-    warn "Input not received."
+  if ! prompt_choice new_port "请输入新的面板端口（1-65535，输入 0 取消）："; then
+    warn "未读取到输入。"
     return
   fi
   new_port="$(printf '%s' "$new_port" | tr -d '[:space:]')"
 
   if [[ "$new_port" == "0" ]]; then
-    echo "Canceled."
+    echo "已取消。"
     return
   fi
   if ! is_valid_port "$new_port"; then
-    warn "Invalid port."
+    warn "端口无效，请输入 1-65535 之间的数字。"
     return
   fi
   if [[ "$new_port" == "$current_port" ]]; then
-    echo "Port unchanged: $new_port"
+    echo "端口未变更：$new_port"
     return
   fi
   if ! is_port_available "$new_port"; then
-    warn "Port is already in use: $new_port"
+    warn "端口已被占用：$new_port"
     return
   fi
 
   set_env_key "FRP_MANAGER_PORT" "$new_port"
   service_restart
-  echo "Port changed to $new_port"
+  echo "端口已修改为：$new_port"
   show_access_urls
 }
 
 main() {
   if is_bootstrap_mode && is_repo_ready "$BOOTSTRAP_DIR"; then
-    log "Detected deployed repository, switching to local controller: $BOOTSTRAP_DIR/control.sh"
+    log "检测到已部署仓库，切换到本地控制器：$BOOTSTRAP_DIR/control.sh"
     exec bash "$BOOTSTRAP_DIR/control.sh" "$@"
   fi
 
   while true; do
     show_menu
     local choice=""
-    if ! prompt_choice choice "Select: "; then
-      warn "Input not received, run in an interactive terminal."
+    if ! prompt_choice choice "请选择操作："; then
+      warn "未读取到输入，请在交互式终端中运行。"
       exit 1
     fi
 
@@ -599,7 +599,7 @@ main() {
         fi
         ;;
       0) exit 0 ;;
-      *) echo "Invalid option." ;;
+      *) echo "无效选项，请重新输入。" ;;
     esac
     echo
   done

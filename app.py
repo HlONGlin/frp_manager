@@ -71,9 +71,9 @@ def error_response(message, status_code=400):
 def parse_json_body():
     body = request.get_json(silent=True)
     if body is None:
-        raise ValidationError('Request body must be JSON')
+        raise ValidationError('请求体必须为 JSON 格式')
     if not isinstance(body, dict):
-        raise ValidationError('JSON body must be an object')
+        raise ValidationError('请求体必须是 JSON 对象')
     return body
 
 
@@ -198,14 +198,14 @@ def handle_validation_error(error):
 @app.errorhandler(404)
 def handle_not_found(_error):
     if request.path.startswith('/api/'):
-        return error_response('Not found', 404)
+        return error_response('请求的资源不存在', 404)
     return _error
 
 
 @app.errorhandler(500)
 def handle_internal_error(_error):
     if request.path.startswith('/api/'):
-        return error_response('Internal server error', 500)
+        return error_response('服务器内部错误', 500)
     return _error
 
 
@@ -355,7 +355,7 @@ def add_frps():
 def get_frps(server_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
     server['status'] = check_frps_status(server.get('server_addr'), server.get('server_port'))
     set_cached_status(str(server.get('id', '')), server['status'])
     return jsonify(server)
@@ -365,7 +365,7 @@ def get_frps(server_id):
 def get_frps_deploy(server_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
     return success_response({'command': build_frps_deploy_command(server, manager_base_url=get_manager_base_url()), 'server': server})
 
 
@@ -374,7 +374,7 @@ def update_frps(server_id):
     updates = validate_server_update(parse_json_body())
     updated = update_frps_server(server_id, updates)
     if not updated:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
     clear_cached_status(server_id)
     return success_response()
 
@@ -383,7 +383,7 @@ def update_frps(server_id):
 def delete_frps(server_id):
     deleted = delete_frps_server(server_id)
     if not deleted:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
     clear_cached_status(server_id)
     return success_response()
 
@@ -392,7 +392,7 @@ def delete_frps(server_id):
 def check_frps(server_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
     status = check_frps_status(server.get('server_addr'), server.get('server_port'))
     set_cached_status(str(server.get('id', '')), status)
     return success_response({'status': status})
@@ -402,12 +402,12 @@ def check_frps(server_id):
 def report_frps(server_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
 
     payload = parse_json_body()
     report_token = str(payload.get('token', '')).strip()
     if not report_token or report_token != str(server.get('token', '')).strip():
-        return error_response('Invalid report token', 403)
+        return error_response('回报令牌无效', 403)
 
     updates_payload = {}
     if 'server_addr' in payload:
@@ -433,7 +433,7 @@ def report_frps(server_id):
 def get_ports(server_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
     return jsonify(server.get('ports', []))
 
 
@@ -441,11 +441,11 @@ def get_ports(server_id):
 def add_port(server_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
     port_config = validate_port_create(parse_json_body())
     created = add_port_mapping(server_id, port_config)
     if not created:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
     return success_response({'port': created}, status_code=201)
 
 
@@ -453,16 +453,16 @@ def add_port(server_id):
 def update_port(server_id, port_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
 
     current_port = find_port(server, port_id)
     if not current_port:
-        return error_response('Port not found', 404)
+        return error_response('端口映射不存在', 404)
 
     validated_port = validate_port_update(parse_json_body(), current_port)
     updated = update_port_mapping(server_id, port_id, validated_port)
     if not updated:
-        return error_response('Port not found', 404)
+        return error_response('端口映射不存在', 404)
     return success_response()
 
 
@@ -470,7 +470,7 @@ def update_port(server_id, port_id):
 def delete_port(server_id, port_id):
     deleted = delete_port_mapping(server_id, port_id)
     if not deleted:
-        return error_response('Port not found', 404)
+        return error_response('端口映射不存在', 404)
     return success_response()
 
 
@@ -478,15 +478,15 @@ def delete_port(server_id, port_id):
 def toggle_port(server_id, port_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
 
     current_port = find_port(server, port_id)
     if not current_port:
-        return error_response('Port not found', 404)
+        return error_response('端口映射不存在', 404)
 
     updated = update_port_mapping(server_id, port_id, {'enabled': not current_port.get('enabled', True)})
     if not updated:
-        return error_response('Port not found', 404)
+        return error_response('端口映射不存在', 404)
     return success_response()
 
 
@@ -494,7 +494,7 @@ def toggle_port(server_id, port_id):
 def generate_frpc_for_server(server_id):
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
 
     config = build_frpc_config(server, server.get('ports', []))
     return success_response({'config': config, 'server': server})
@@ -505,11 +505,11 @@ def generate_frpc_deploy(server_id, port_id):
     system = validate_system(request.args.get('system', 'linux'))
     server = get_frps_server(server_id)
     if not server:
-        return error_response('Server not found', 404)
+        return error_response('服务器不存在', 404)
 
     port = find_port(server, port_id)
     if not port:
-        return error_response('Port not found', 404)
+        return error_response('端口映射不存在', 404)
 
     command = build_frpc_deploy_command(server, port, system=system)
     return success_response({'command': command})
@@ -531,7 +531,7 @@ def frpc_config_create():
 def delete_frpc(config_id):
     deleted = delete_frpc_config(config_id)
     if not deleted:
-        return error_response('Config not found', 404)
+        return error_response('客户端配置不存在', 404)
     return success_response()
 
 

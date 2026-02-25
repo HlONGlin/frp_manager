@@ -267,7 +267,7 @@ function renderServerCard(server) {
         <div class="server-card">
             <div class="server-header">
                 <div class="server-info">
-                    <span class="server-name">${safeHtml(server.name || 'FRPS Server')}</span>
+                    <span class="server-name">${safeHtml(server.name || 'FRPS服务器')}</span>
                     <span class="server-address">${safeHtml(server.server_addr)}:${safeHtml(server.server_port)}</span>
                 </div>
                 <div class="server-status">
@@ -313,7 +313,7 @@ function renderPorts(serverId, ports) {
         return `
             <div class="port-item ${enabled ? '' : 'port-disabled'}">
                 <div class="port-info">
-                    <span class="port-name">${safeHtml(port.name || 'Port Mapping')}</span>
+                    <span class="port-name">${safeHtml(port.name || '端口映射')}</span>
                     <span class="port-mapping">${mapping}</span>
                     <span class="port-protocol">${safeHtml((port.protocol || 'tcp').toUpperCase())}</span>
                 </div>
