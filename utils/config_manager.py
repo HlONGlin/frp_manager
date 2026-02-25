@@ -13,6 +13,11 @@ LOCK = threading.RLock()
 DEFAULT_CONFIG = {
     "frps_servers": [],
     "frpc_configs": [],
+    "auth": {
+        "initialized": False,
+        "admin_username": "",
+        "password_hash": "",
+    },
 }
 
 
@@ -29,6 +34,18 @@ def _normalize_config(raw_config):
         config['frps_servers'] = []
     if not isinstance(config.get('frpc_configs'), list):
         config['frpc_configs'] = []
+
+    auth = config.get('auth')
+    if not isinstance(auth, dict):
+        auth = {}
+    admin_username = auth.get('admin_username') if isinstance(auth.get('admin_username'), str) else ''
+    password_hash = auth.get('password_hash') if isinstance(auth.get('password_hash'), str) else ''
+    initialized = bool(auth.get('initialized') and admin_username and password_hash)
+    config['auth'] = {
+        'initialized': initialized,
+        'admin_username': admin_username,
+        'password_hash': password_hash,
+    }
     return config
 
 
@@ -269,3 +286,36 @@ def delete_frpc_config(config_id):
             config['frpc_configs'] = new_configs
             _atomic_write(CONFIG_FILE, config)
         return deleted
+
+
+def get_auth_config():
+    config = load_config()
+    auth = config.get('auth', {})
+    return copy.deepcopy(auth)
+
+
+def is_auth_initialized():
+    auth = get_auth_config()
+    return bool(
+        auth.get('initialized')
+        and str(auth.get('admin_username', '')).strip()
+        and str(auth.get('password_hash', '')).strip()
+    )
+
+
+def set_admin_credentials(username, password_hash):
+    with LOCK:
+        config = load_config()
+        config['auth'] = {
+            'initialized': True,
+            'admin_username': str(username).strip(),
+            'password_hash': str(password_hash).strip(),
+        }
+        _atomic_write(CONFIG_FILE, config)
+
+
+def clear_admin_credentials():
+    with LOCK:
+        config = load_config()
+        config['auth'] = copy.deepcopy(DEFAULT_CONFIG['auth'])
+        _atomic_write(CONFIG_FILE, config)
