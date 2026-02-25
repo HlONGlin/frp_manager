@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FRP 内网穿透管理</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">FRP 管理面板</span>
+            </div>
+            <nav class="nav-tabs">
+                <button class="nav-tab active" data-tab="frps">
+                    <span class="tab-icon">🖥️</span>
+                    FRPS 服务器
+                </button>
+                <button class="nav-tab" data-tab="terminal">
+                    <span class="tab-icon">⌨️</span>
+                    终端
+                </button>
+            </nav>
+        </header>
+
+        <main class="main-content">
+            <section id="frps-panel" class="tab-panel active">
+                <div class="panel-header">
+                    <h2>FRPS 服务器列表</h2>
+                    <button class="btn btn-primary" id="add-frps-server">
+                        <span class="btn-icon">➕</span> 添加服务器
+                    </button>
+                </div>
+
+                <div class="servers-grid" id="frps-servers-list">
+                    <div class="empty-state">
+                        <span class="empty-icon">🖥️</span>
+                        <p>暂无 FRPS 服务器</p>
+                        <p class="hint">点击"添加服务器"登记一个新的 FRPS 服务器</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="terminal-panel" class="tab-panel">
+                <div class="panel-header">
+                    <h2>终端</h2>
+                    <div class="terminal-actions">
+                        <button class="btn btn-secondary" id="clear-terminal">清空</button>
+                    </div>
+                </div>
+                <div class="terminal-container">
+                    <div class="terminal-output" id="terminal-output">
+                        <div class="terminal-line">FRP 管理面板终端 v1.0</div>
+                        <div class="terminal-line">请在下方输入命令...</div>
+                    </div>
+                    <div class="terminal-input-container">
+                        <span class="prompt">$</span>
+                        <input type="text" id="terminal-input" placeholder="输入命令...">
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <span class="footer-text">FRP 管理面板 © 2024</span>
+            <span class="version">v1.0.0</span>
+        </footer>
+    </div>
+
+    <div class="modal" id="frps-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="frps-modal-title">添加 FRPS 服务器</h3>
+                <button class="modal-close" id="close-frps-modal">&times;</button>
+            </div>
+            <form id="frps-form">
+                <input type="hidden" name="id" id="frps-server-id">
+                <div class="form-group">
+                    <label>服务器名称</label>
+                    <input type="text" name="name" placeholder="我的 FRPS 服务器" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>服务器地址</label>
+                        <input type="text" name="server_addr" placeholder="例如: 192.168.1.10 或 your.domain.com" required>
+                    </div>
+                    <div class="form-group">
+                        <label>服务端口</label>
+                        <input type="number" name="server_port" value="7000" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>连接令牌 (Token)</label>
+                    <input type="text" name="token" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>仪表盘端口</label>
+                        <input type="number" name="dashboard_port" value="7500">
+                    </div>
+                    <div class="form-group">
+                        <label>HTTP 端口</label>
+                        <input type="number" name="vhost_http_port" value="80">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>仪表盘用户名</label>
+                    <input type="text" name="dashboard_user" value="admin">
+                </div>
+                <div class="form-group">
+                    <label>HTTPS 端口</label>
+                    <input type="number" name="vhost_https_port" value="443">
+                </div>
+                <div class="form-group">
+                    <label>仪表盘密码</label>
+                    <input type="password" name="dashboard_pwd" value="admin">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="cancel-frps-modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存服务器</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal" id="port-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="port-modal-title">添加端口映射</h3>
+                <button class="modal-close" id="close-port-modal">&times;</button>
+            </div>
+            <form id="port-form">
+                <input type="hidden" name="server_id" id="port-server-id">
+                <input type="hidden" name="port_id" id="port-id">
+                <div class="form-group">
+                    <label>映射名称</label>
+                    <input type="text" name="name" placeholder="web" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>协议类型</label>
+                        <select name="protocol" id="port-protocol">
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                            <option value="http">HTTP</option>
+                            <option value="https">HTTPS</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>远程端口</label>
+                        <input type="number" name="remote_port" id="remote-port-input" placeholder="6000">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>本地 IP</label>
+                        <input type="text" name="local_ip" value="127.0.0.1">
+                    </div>
+                    <div class="form-group">
+                        <label>本地端口</label>
+                        <input type="number" name="local_port" placeholder="80" required>
+                    </div>
+                </div>
+                <div class="form-group" id="domain-group" style="display:none;">
+                    <label>自定义域名</label>
+                    <input type="text" name="domain" placeholder="example.com">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="cancel-port-modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存映射</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal" id="frpc-modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>FRPC 一键部署</h3>
+                <button class="modal-close" id="close-frpc-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="hint">复制以下命令在客户端服务器上运行：</p>
+                <div class="code-block">
+                    <pre id="frpc-config-output"><code></code></pre>
+                </div>
+                <button class="btn btn-primary copy-btn" id="copy-frpc-config">
+                    <span class="btn-icon">📋</span> 复制部署命令
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="system-select-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>选择部署系统</h3>
+                <button class="modal-close" id="close-system-modal">&times;</button>
+            </div>
+                <div class="modal-body system-options">
+                    <p class="hint">请选择要部署的系统类型：</p>
+                    <div class="system-buttons">
+                        <button type="button" class="system-btn" data-system="linux">
+                            <span class="system-icon">🐧</span>
+                            <span class="system-name">Linux</span>
+                        </button>
+                        <button type="button" class="system-btn" data-system="windows">
+                            <span class="system-icon">🪟</span>
+                            <span class="system-name">Windows</span>
+                        </button>
+                    </div>
+                </div>
+        </div>
+    </div>
+
+    <div class="modal" id="deploy-modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>一键部署 FRPS</h3>
+                <button class="modal-close" id="close-deploy-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="hint">复制以下命令在服务器上运行，即可部署 FRPS 并连接到管理面板：</p>
+                <div class="code-block">
+                    <pre id="deploy-command"><code></code></pre>
+                </div>
+                <div class="deploy-info">
+                    <p><strong>服务端口:</strong> <span id="deploy-port"></span></p>
+                    <p><strong>Token:</strong> <span id="deploy-token"></span></p>
+                    <p><strong>仪表盘端口:</strong> <span id="deploy-dashboard"></span></p>
+                </div>
+                <button class="btn btn-primary copy-btn" id="copy-deploy-command">
+                    <span class="btn-icon">📋</span> 复制命令
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
