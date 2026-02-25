@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 控制器菜单支持：
 
 1. 部署/更新项目
-2. 卸载服务与文件
+2. 彻底卸载（删除服务、配置数据与项目目录）
 3. 重启服务
 4. 停止服务
 5. 查看状态与访问地址

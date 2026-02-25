@@ -422,7 +422,7 @@ show_menu() {
   else
     echo "1) 安装或更新"
   fi
-  echo "2) 卸载服务并删除文件"
+  echo "2) 彻底卸载（删除服务、数据与目录）"
   echo "3) 重启服务"
   echo "4) 停止服务"
   echo "5) 查看服务状态与访问地址"
@@ -475,7 +475,7 @@ do_install() {
 do_uninstall() {
   require_root
   local confirm=""
-  if ! prompt_choice confirm "确认卸载并删除全部项目文件？[y/N]："; then
+  if ! prompt_choice confirm "确认彻底卸载并删除全部数据（含目录）？[y/N]："; then
     warn "未读取到输入。"
     return
   fi
@@ -485,7 +485,7 @@ do_uninstall() {
     return
   fi
   bash "$APP_DIR/uninstall.sh"
-  echo "卸载完成。"
+  echo "彻底卸载完成。"
   exit 0
 }
 
