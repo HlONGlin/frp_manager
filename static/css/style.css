@@ -732,6 +732,13 @@ body {
     color: var(--highlight);
 }
 
+.deploy-info a {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    word-break: break-all;
+}
+
 .system-options {
     text-align: center;
     padding: 30px;

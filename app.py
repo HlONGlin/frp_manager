@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import os
@@ -8,7 +8,7 @@ import socket
 import sys
 import threading
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, quote_plus, urlparse
 from werkzeug.security import check_password_hash, generate_password_hash
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +53,8 @@ MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
 TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 TOKEN_LENGTH = 32
+DEPLOY_KEY_LENGTH = 48
+SENSITIVE_SERVER_FIELDS = {'deploy_key'}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FRP_MANAGER_SECRET_KEY') or os.urandom(32).hex()
@@ -110,6 +112,14 @@ def generate_server_token(length=TOKEN_LENGTH):
     return ''.join(secrets.choice(TOKEN_ALPHABET) for _ in range(length))
 
 
+def generate_deploy_key(length=DEPLOY_KEY_LENGTH):
+    return secrets.token_urlsafe(length)[:length]
+
+
+def shell_single_quote(text):
+    return "'" + str(text or '').replace("'", "'\"'\"'") + "'"
+
+
 def get_local_ip():
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -159,6 +169,98 @@ def get_manager_base_urls(server=None):
         seen.add(base_url)
         normalized.append(base_url)
     return normalized
+
+
+def sanitize_server(server):
+    if not isinstance(server, dict):
+        return server
+    sanitized = dict(server)
+    for field in SENSITIVE_SERVER_FIELDS:
+        sanitized.pop(field, None)
+    return sanitized
+
+
+def sanitize_servers(servers):
+    return [sanitize_server(server) for server in servers]
+
+
+def ensure_server_deploy_key(server):
+    if not isinstance(server, dict):
+        return ''
+    deploy_key = str(server.get('deploy_key', '')).strip()
+    if deploy_key:
+        return deploy_key
+
+    deploy_key = generate_deploy_key()
+    server_id = str(server.get('id', '')).strip()
+    if server_id:
+        update_frps_server(server_id, {'deploy_key': deploy_key})
+    server['deploy_key'] = deploy_key
+    return deploy_key
+
+
+def build_frps_deploy_script_url(base_url, server_id, deploy_key):
+    normalized_base = normalize_base_url(base_url)
+    normalized_server_id = str(server_id or '').strip()
+    normalized_deploy_key = str(deploy_key or '').strip()
+    if not normalized_base or not normalized_server_id or not normalized_deploy_key:
+        return ''
+    return (
+        f'{normalized_base}/api/frps/server/{quote(normalized_server_id, safe="")}/deploy.sh'
+        f'?deploy_key={quote_plus(normalized_deploy_key)}'
+    )
+
+
+def get_frps_deploy_script_urls(server, manager_base_urls=None):
+    if not isinstance(server, dict):
+        return []
+
+    deploy_key = ensure_server_deploy_key(server)
+    server_id = str(server.get('id', '')).strip()
+    if not deploy_key or not server_id:
+        return []
+
+    candidate_base_urls = manager_base_urls if manager_base_urls is not None else get_manager_base_urls(server)
+    script_urls = []
+    seen_urls = set()
+    for base_url in candidate_base_urls:
+        script_url = build_frps_deploy_script_url(base_url, server_id, deploy_key)
+        if not script_url or script_url in seen_urls:
+            continue
+        seen_urls.add(script_url)
+        script_urls.append(script_url)
+    return script_urls
+
+
+def build_frps_one_click_command(script_urls):
+    normalized_urls = [str(url).strip() for url in (script_urls or []) if str(url).strip()]
+    if not normalized_urls:
+        return ''
+    if len(normalized_urls) == 1:
+        return f'curl -fsSL {shell_single_quote(normalized_urls[0])} | (command -v sudo >/dev/null 2>&1 && sudo bash || bash)'
+
+    joined_urls = ' '.join(shell_single_quote(url) for url in normalized_urls)
+    return (
+        f'for deploy_url in {joined_urls}; do '
+        'if curl -fsSL "$deploy_url" | (command -v sudo >/dev/null 2>&1 && sudo bash || bash); then exit 0; fi; '
+        'echo "deploy url unreachable: $deploy_url" >&2; '
+        'done; '
+        'echo "all deploy urls failed, check FRP_MANAGER_PUBLIC_URL or manager_url." >&2; '
+        'exit 1'
+    )
+
+def build_frps_deploy_payload(server):
+    manager_urls = get_manager_base_urls(server)
+    deploy_script = build_frps_deploy_command(server, manager_base_urls=manager_urls)
+    deploy_urls = get_frps_deploy_script_urls(server, manager_base_urls=manager_urls)
+    one_click_command = build_frps_one_click_command(deploy_urls) or deploy_script
+    return {
+        'manager_urls': manager_urls,
+        'deploy_script': deploy_script,
+        'deploy_urls': deploy_urls,
+        'deploy_url': deploy_urls[0] if deploy_urls else '',
+        'one_click_command': one_click_command,
+    }
 
 
 def utc_now_iso():
@@ -316,6 +418,7 @@ def enforce_auth_flow():
     endpoint = request.endpoint or ''
     path = request.path or ''
     is_report_callback = path.startswith('/api/frps/server/') and path.endswith('/report')
+    is_deploy_script = path.startswith('/api/frps/server/') and path.endswith('/deploy.sh')
 
     if endpoint == 'static':
         return None
@@ -333,7 +436,7 @@ def enforce_auth_flow():
     }
 
     if not setup_done:
-        if api_request and path not in auth_allowed_api_paths and not is_report_callback:
+        if api_request and path not in auth_allowed_api_paths and not is_report_callback and not is_deploy_script:
             return error_response('管理员账号未初始化，请先完成首次设置', 403)
         if not api_request and path != '/setup':
             return redirect(url_for('setup_page'))
@@ -342,7 +445,7 @@ def enforce_auth_flow():
     if path == '/setup':
         return redirect(url_for('index'))
 
-    if path in auth_allowed_paths or path in auth_allowed_api_paths or is_report_callback:
+    if path in auth_allowed_paths or path in auth_allowed_api_paths or is_report_callback or is_deploy_script:
         return None
 
     if is_logged_in():
@@ -438,7 +541,7 @@ def frps_servers_list():
     refresh = request.args.get('refresh', '0').lower() in {'1', 'true', 'yes'}
     servers = get_frps_servers()
     attach_server_statuses(servers, refresh=refresh)
-    return jsonify(servers)
+    return jsonify(sanitize_servers(servers))
 
 
 @app.route('/api/frps/server', methods=['POST'])
@@ -447,13 +550,21 @@ def add_frps():
     if not str(raw_payload.get('token', '')).strip():
         raw_payload['token'] = generate_server_token()
     payload = validate_server_create(raw_payload, get_local_ip())
+    payload['deploy_key'] = generate_deploy_key()
     payload['last_report_at'] = ''
     server = add_frps_server(payload)
     clear_cached_status(str(server.get('id', '')))
-    manager_urls = get_manager_base_urls(server)
-    deploy_command = build_frps_deploy_command(server, manager_base_urls=manager_urls)
+    deploy_payload = build_frps_deploy_payload(server)
     return success_response(
-        {'server': server, 'deploy_command': deploy_command, 'local_ip': get_local_ip(), 'manager_urls': manager_urls},
+        {
+            'server': sanitize_server(server),
+            'deploy_command': deploy_payload['one_click_command'],
+            'deploy_script': deploy_payload['deploy_script'],
+            'deploy_url': deploy_payload['deploy_url'],
+            'deploy_urls': deploy_payload['deploy_urls'],
+            'local_ip': get_local_ip(),
+            'manager_urls': deploy_payload['manager_urls'],
+        },
         status_code=201,
     )
 
@@ -465,7 +576,7 @@ def get_frps(server_id):
         return error_response('服务器不存在', 404)
     server['status'] = check_frps_status(server.get('server_addr'), server.get('server_port'), server.get('last_report_at'))
     set_cached_status(str(server.get('id', '')), server['status'])
-    return jsonify(server)
+    return jsonify(sanitize_server(server))
 
 
 @app.route('/api/frps/server/<server_id>/deploy', methods=['GET'])
@@ -473,12 +584,34 @@ def get_frps_deploy(server_id):
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
-    manager_urls = get_manager_base_urls(server)
+    deploy_payload = build_frps_deploy_payload(server)
     return success_response({
-        'command': build_frps_deploy_command(server, manager_base_urls=manager_urls),
-        'server': server,
-        'manager_urls': manager_urls,
+        'command': deploy_payload['one_click_command'],
+        'script': deploy_payload['deploy_script'],
+        'deploy_url': deploy_payload['deploy_url'],
+        'deploy_urls': deploy_payload['deploy_urls'],
+        'server': sanitize_server(server),
+        'manager_urls': deploy_payload['manager_urls'],
     })
+
+
+@app.route('/api/frps/server/<server_id>/deploy.sh', methods=['GET'])
+def get_frps_deploy_script(server_id):
+    server = get_frps_server(server_id)
+    if not server:
+        return Response('echo "FRPS 服务器不存在" >&2\nexit 1\n', status=404, mimetype='text/plain; charset=utf-8')
+
+    deploy_key = str(request.args.get('deploy_key', '')).strip()
+    expected_key = ensure_server_deploy_key(server)
+    if not deploy_key or not expected_key or not secrets.compare_digest(deploy_key, expected_key):
+        return Response('echo "deploy_key 无效" >&2\nexit 1\n', status=403, mimetype='text/plain; charset=utf-8')
+
+    deploy_payload = build_frps_deploy_payload(server)
+    script = deploy_payload['deploy_script'].strip()
+    body = '#!/usr/bin/env bash\nset -euo pipefail\n\n' + script + '\n'
+    response = Response(body, mimetype='text/plain; charset=utf-8')
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @app.route('/api/frps/server/<server_id>', methods=['PUT'])
@@ -673,3 +806,4 @@ if __name__ == '__main__':
     except ValueError:
         port = 5000
     app.run(debug=debug, host=host, port=port)
+

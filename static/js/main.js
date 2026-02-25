@@ -452,7 +452,7 @@ async function saveFRPSServer(event) {
         await loadServers(false);
 
         if (!serverId && data.deploy_command) {
-            showDeployModal(data.server, data.deploy_command, data.manager_urls);
+            showDeployModal(data.server, data.deploy_command, data.manager_urls, data.deploy_url, data.deploy_urls);
         }
     } catch (error) {
         showToast(error.message || '保存失败', 'error');
@@ -555,13 +555,13 @@ async function generateFRPC(serverId) {
 async function showFRPSDeployCommand(serverId) {
     try {
         const data = await apiRequest(`/api/frps/server/${serverId}/deploy`);
-        showDeployModal(data.server, data.command, data.manager_urls);
+        showDeployModal(data.server, data.command, data.manager_urls, data.deploy_url, data.deploy_urls);
     } catch (error) {
         showToast(error.message || '获取部署命令失败', 'error');
     }
 }
 
-function showDeployModal(server, command, managerUrls = []) {
+function showDeployModal(server, command, managerUrls = [], deployUrl = '', deployUrls = []) {
     const code = document.querySelector('#deploy-command code');
     if (code) {
         code.textContent = command || '';
@@ -569,7 +569,10 @@ function showDeployModal(server, command, managerUrls = []) {
     const deployPort = document.getElementById('deploy-port');
     const deployToken = document.getElementById('deploy-token');
     const deployDashboard = document.getElementById('deploy-dashboard');
+    const deployUrlElement = document.getElementById('deploy-url');
+    const deployUrlsElement = document.getElementById('deploy-urls');
     const deployManagerUrls = document.getElementById('deploy-manager-urls');
+
     if (deployPort) {
         deployPort.textContent = server?.server_port || '';
     }
@@ -579,14 +582,34 @@ function showDeployModal(server, command, managerUrls = []) {
     if (deployDashboard) {
         deployDashboard.textContent = server?.dashboard_port || '';
     }
+
+    const normalizedDeployUrls = Array.isArray(deployUrls)
+        ? deployUrls.map((item) => String(item || '').trim()).filter((item) => item)
+        : [];
+    const primaryDeployUrl = String(deployUrl || normalizedDeployUrls[0] || '').trim();
+
+    if (deployUrlElement) {
+        if (primaryDeployUrl) {
+            deployUrlElement.textContent = primaryDeployUrl;
+            deployUrlElement.href = primaryDeployUrl;
+        } else {
+            deployUrlElement.textContent = '未生成';
+            deployUrlElement.removeAttribute('href');
+        }
+    }
+
+    if (deployUrlsElement) {
+        deployUrlsElement.textContent = normalizedDeployUrls.length ? normalizedDeployUrls.join(' , ') : '未生成';
+    }
+
     if (deployManagerUrls) {
         const urls = Array.isArray(managerUrls) ? managerUrls.filter((item) => String(item || '').trim()) : [];
         deployManagerUrls.textContent = urls.length ? urls.join(' , ') : '未配置';
     }
+
     openModal('deploy-modal');
     triggerFastStatusSync();
 }
-
 function showSystemSelect(serverId, portId) {
     state.selectedDeploy.serverId = serverId;
     state.selectedDeploy.portId = portId;
@@ -784,3 +807,4 @@ function safeHtml(value) {
 function safeAttr(value) {
     return safeHtml(value);
 }
+
