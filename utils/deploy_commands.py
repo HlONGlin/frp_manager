@@ -82,9 +82,10 @@ if command -v curl >/dev/null 2>&1; then
         -H "Content-Type: application/json" \\
         -d '{{"token":"'"$FRPS_TOKEN"'","server_addr":"'"$REPORTED_IP"'","server_port":{_value(server.get('server_port'))}}}' \\
         >/dev/null 2>&1 || true
+    echo "已向管理面板回报 FRPS 地址: $REPORTED_IP"
+else
+    echo "未检测到 curl，无法自动回报地址到管理面板。"
 fi
-
-echo "已向管理面板回报 FRPS 地址: $REPORTED_IP"
 """
 
     return f"""# FRPS 一键部署命令
