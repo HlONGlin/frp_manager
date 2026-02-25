@@ -24,6 +24,17 @@ def _safe_proxy_name(raw_name):
     return normalized or 'proxy'
 
 
+def _escape_for_batch_echo(text):
+    escaped = _value(text)
+    escaped = escaped.replace('^', '^^')
+    escaped = escaped.replace('&', '^&')
+    escaped = escaped.replace('|', '^|')
+    escaped = escaped.replace('<', '^<')
+    escaped = escaped.replace('>', '^>')
+    escaped = escaped.replace('%', '%%')
+    return escaped
+
+
 def _build_proxy_section(port):
     lines = [
         f'[{_safe_proxy_name(port.get("name"))}]',
@@ -159,6 +170,14 @@ def build_frpc_deploy_command(server, port, system='linux'):
     protocol = _value(port.get('protocol')).lower()
 
     if system == 'windows':
+        windows_echo_lines = []
+        for line in config.splitlines():
+            if line:
+                windows_echo_lines.append(f"echo {_escape_for_batch_echo(line)}")
+            else:
+                windows_echo_lines.append("echo(")
+        windows_echo_config = '\n'.join(windows_echo_lines)
+
         if protocol in {'http', 'https'}:
             target_line = f'echo 访问地址: http://{_value(port.get("domain"))}:{_value(server.get("vhost_http_port"))}'
         else:
@@ -176,9 +195,10 @@ powershell -Command "Invoke-WebRequest -Uri '{BASE_DOWNLOAD_URL}/{WINDOWS_PACKAG
 powershell -Command "Expand-Archive -Path 'frpc.zip' -DestinationPath '.' -Force"
 cd {WINDOWS_FOLDER_NAME}
 
-powershell -NoProfile -Command "@'
-{config}
-'@ | Set-Content -Path 'frpc.ini' -Encoding UTF8"
+(
+@echo off
+{windows_echo_config}
+) > frpc.ini
 
 start /b frpc.exe -c frpc.ini
 echo.
