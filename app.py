@@ -113,8 +113,18 @@ def get_manager_base_url():
     return request.url_root.rstrip('/')
 
 
+def normalize_server_addr(server_addr):
+    return str(server_addr or '').strip()
+
+
+def has_server_address(server_addr):
+    return bool(normalize_server_addr(server_addr))
+
+
 def check_frps_status(server_addr, server_port):
-    host = server_addr or "127.0.0.1"
+    host = normalize_server_addr(server_addr)
+    if not host:
+        return 'pending'
     try:
         port = int(server_port)
     except (TypeError, ValueError):
@@ -163,7 +173,13 @@ def attach_server_statuses(servers, refresh=False):
     if not refresh:
         for server in servers:
             server_id = str(server.get('id', ''))
-            server['status'] = get_cached_status(server_id) or 'unknown'
+            cached_status = get_cached_status(server_id)
+            if cached_status:
+                server['status'] = cached_status
+            elif not has_server_address(server.get('server_addr')):
+                server['status'] = 'pending'
+            else:
+                server['status'] = 'unknown'
         return
 
     worker_count = min(max(1, STATUS_WORKERS), len(servers))
@@ -346,7 +362,7 @@ def add_frps():
     clear_cached_status(str(server.get('id', '')))
     deploy_command = build_frps_deploy_command(server, manager_base_url=get_manager_base_url())
     return success_response(
-        {'server': server, 'deploy_command': deploy_command, 'local_ip': server.get('server_addr')},
+        {'server': server, 'deploy_command': deploy_command, 'local_ip': get_local_ip()},
         status_code=201,
     )
 
@@ -396,6 +412,12 @@ def check_frps(server_id):
     status = check_frps_status(server.get('server_addr'), server.get('server_port'))
     set_cached_status(str(server.get('id', '')), status)
     return success_response({'status': status})
+
+
+def validate_server_addr_ready(server):
+    if has_server_address(server.get('server_addr')):
+        return None
+    return error_response('服务器地址尚未识别，请先在目标子服务器执行 FRPS 一键部署命令', 409)
 
 
 @app.route('/api/frps/server/<server_id>/report', methods=['POST'])
@@ -495,6 +517,9 @@ def generate_frpc_for_server(server_id):
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
+    addr_error = validate_server_addr_ready(server)
+    if addr_error:
+        return addr_error
 
     config = build_frpc_config(server, server.get('ports', []))
     return success_response({'config': config, 'server': server})
@@ -506,6 +531,9 @@ def generate_frpc_deploy(server_id, port_id):
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
+    addr_error = validate_server_addr_ready(server)
+    if addr_error:
+        return addr_error
 
     port = find_port(server, port_id)
     if not port:

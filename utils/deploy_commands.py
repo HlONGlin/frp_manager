@@ -76,19 +76,15 @@ def build_frps_deploy_command(server, manager_base_url=None):
 MANAGER_URL='{_value(manager_base_url).rstrip('/')}'
 FRPS_SERVER_ID='{_value(server.get('id'))}'
 FRPS_TOKEN='{_value(server.get('token'))}'
-REPORTED_IP="$(hostname -I 2>/dev/null | awk '{{print $1}}')"
 
 if command -v curl >/dev/null 2>&1; then
-    PUBLIC_IP="$(curl -s --max-time 3 https://api.ipify.org || true)"
-    if [ -n "$PUBLIC_IP" ]; then
-        REPORTED_IP="$PUBLIC_IP"
-    fi
-
     curl -s -X POST "$MANAGER_URL/api/frps/server/$FRPS_SERVER_ID/report" \\
         -H "Content-Type: application/json" \\
         -d '{{"token":"'"$FRPS_TOKEN"'","server_addr":"'"$REPORTED_IP"'","server_port":{_value(server.get('server_port'))}}}' \\
         >/dev/null 2>&1 || true
 fi
+
+echo "已向管理面板回报 FRPS 地址: $REPORTED_IP"
 """
 
     return f"""# FRPS 一键部署命令
@@ -96,6 +92,17 @@ mkdir -p /opt/frp && cd /opt/frp
 wget -O frps.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME}
 tar -xzf frps.tar.gz
 cd {LINUX_FOLDER_NAME}
+
+REPORTED_IP="$(hostname -I 2>/dev/null | awk '{{print $1}}')"
+if command -v curl >/dev/null 2>&1; then
+    PUBLIC_IP="$(curl -s --max-time 3 https://api.ipify.org || true)"
+    if [ -n "$PUBLIC_IP" ]; then
+        REPORTED_IP="$PUBLIC_IP"
+    fi
+fi
+if [ -z "$REPORTED_IP" ]; then
+    REPORTED_IP="127.0.0.1"
+fi
 
 cat > frps.ini << 'EOF'
 [common]
@@ -112,7 +119,8 @@ EOF
 nohup ./frps -c frps.ini >/dev/null 2>&1 &
 
 echo "FRPS 部署完成！"
-echo "仪表盘地址: http://{_value(server.get('server_addr'))}:{_value(server.get('dashboard_port'))}"
+echo "FRPS 服务器地址: $REPORTED_IP"
+echo "仪表盘地址: http://$REPORTED_IP:{_value(server.get('dashboard_port'))}"
 echo "用户名: {_value(server.get('dashboard_user'))}"
 echo "密码: {_value(server.get('dashboard_pwd'))}"
 {callback_block}

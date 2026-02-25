@@ -257,10 +257,18 @@ function renderServerCard(server) {
     if (server.status === 'online') {
         statusText = '在线';
         statusClass = 'running';
+    } else if (server.status === 'pending') {
+        statusText = '待部署';
+        statusClass = 'starting';
     } else if (server.status === 'offline') {
         statusText = '离线';
         statusClass = 'stopped';
     }
+    const serverAddr = String(server.server_addr || '').trim();
+    const serverPort = safeHtml(server.server_port);
+    const serverAddressText = serverAddr
+        ? `${safeHtml(serverAddr)}:${serverPort}`
+        : `待部署后自动识别（端口 ${serverPort}）`;
     const ports = Array.isArray(server.ports) ? server.ports : [];
 
     return `
@@ -268,7 +276,7 @@ function renderServerCard(server) {
             <div class="server-header">
                 <div class="server-info">
                     <span class="server-name">${safeHtml(server.name || 'FRPS服务器')}</span>
-                    <span class="server-address">${safeHtml(server.server_addr)}:${safeHtml(server.server_port)}</span>
+                    <span class="server-address">${serverAddressText}</span>
                 </div>
                 <div class="server-status">
                     <span class="status-dot ${statusClass}"></span>
@@ -342,7 +350,6 @@ function openFRPSModal(server = null) {
         title.textContent = '编辑 FRPS 服务器';
         idInput.value = server.id || '';
         form.name.value = server.name || '';
-        form.server_addr.value = server.server_addr || state.localIp;
         form.server_port.value = server.server_port || 7000;
         form.token.value = server.token || '';
         form.dashboard_port.value = server.dashboard_port || 7500;
@@ -354,7 +361,6 @@ function openFRPSModal(server = null) {
         title.textContent = '添加 FRPS 服务器';
         form.reset();
         idInput.value = '';
-        form.server_addr.value = state.localIp;
         form.token.value = generateToken();
         form.server_port.value = 7000;
         form.dashboard_port.value = 7500;
@@ -421,7 +427,6 @@ async function saveFRPSServer(event) {
 
     const payload = {
         name: form.name.value.trim(),
-        server_addr: form.server_addr.value.trim(),
         server_port: asInt(form.server_port.value),
         token: form.token.value.trim(),
         dashboard_port: asInt(form.dashboard_port.value),
@@ -464,7 +469,13 @@ async function deleteFRPSServer(serverId) {
 
 async function refreshServer(serverId) {
     const data = await apiRequest(`/api/frps/server/${serverId}/check`, { method: 'POST' });
-    showToast(`服务器状态: ${data.status === 'online' ? '在线' : '离线'}`, 'success');
+    const statusTextMap = {
+        online: '在线',
+        offline: '离线',
+        pending: '待部署',
+        unknown: '检测中',
+    };
+    showToast(`服务器状态: ${statusTextMap[data.status] || '未知'}`, 'success');
     await loadServers(true);
 }
 
