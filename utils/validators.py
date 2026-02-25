@@ -128,13 +128,14 @@ def _as_bool(value, field, default=True):
     raise ValidationError(f'{field_name}必须是布尔值')
 
 
-def validate_server_create(payload, local_ip):
+def validate_server_create(payload, _local_ip):
     payload = _ensure_dict(payload)
     _ensure_known_fields(payload, SERVER_FIELDS)
 
     return {
         'name': _as_text(payload.get('name'), 'name', default='FRPS服务器', pattern=NAME_PATTERN),
-        'server_addr': _as_text(payload.get('server_addr'), 'server_addr', default=local_ip, pattern=HOST_PATTERN),
+        # 服务器地址由子服务器部署后自动上报，创建时默认留空。
+        'server_addr': _as_text(payload.get('server_addr'), 'server_addr', default='', pattern=HOST_PATTERN),
         'server_port': _as_port(payload.get('server_port'), 'server_port', required=True),
         'token': _as_text(payload.get('token'), 'token', required=True, pattern=TOKEN_PATTERN),
         'dashboard_port': _as_port(payload.get('dashboard_port'), 'dashboard_port', default=7500),
