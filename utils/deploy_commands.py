@@ -132,6 +132,7 @@ def build_frpc_deploy_command(server, port, system='linux'):
     protocol = _value(port.get('protocol')).lower()
 
     if system == 'windows':
+        windows_echo_config = config.replace('\n', '\necho ')
         if protocol in {'http', 'https'}:
             target_line = f'echo 访问地址: http://{_value(port.get("domain"))}:{_value(server.get("vhost_http_port"))}'
         else:
@@ -150,7 +151,7 @@ powershell -Command "Expand-Archive -Path 'frpc.zip' -DestinationPath '.' -Force
 cd {WINDOWS_FOLDER_NAME}
 
 (
-echo {config.replace('\n', '\necho ')}
+echo {windows_echo_config}
 ) > frpc.ini
 
 start /b frpc.exe -c frpc.ini

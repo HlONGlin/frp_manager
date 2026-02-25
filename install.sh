@@ -14,11 +14,11 @@ log() {
 }
 
 warn() {
-  printf '[%s] WARN: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+  printf '[%s] 警告: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
 }
 
 die() {
-  printf '[%s] ERROR: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+  printf '[%s] 错误: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
   exit 1
 }
 
@@ -28,7 +28,7 @@ has_cmd() {
 
 require_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    die "Please run with root privileges."
+    die "请使用 root 权限运行安装脚本。"
   fi
 }
 
@@ -49,7 +49,7 @@ install_python_dependencies() {
 
   local pm
   pm="$(detect_pkg_manager)"
-  warn "${PYTHON_BIN} not found, trying to install runtime dependencies with package manager: $pm"
+  warn "未检测到 ${PYTHON_BIN}，尝试通过包管理器安装运行环境：$pm"
 
   case "$pm" in
     apt)
@@ -62,13 +62,13 @@ install_python_dependencies() {
     zypper) zypper --non-interactive install python3 python3-pip ;;
     pacman) pacman -Sy --noconfirm python python-pip ;;
     apk) apk add --no-cache python3 py3-pip ;;
-    *) die "Unsupported package manager, install python manually." ;;
+    *) die "当前包管理器不受支持，请手动安装 Python 运行环境。" ;;
   esac
 }
 
 ensure_systemd() {
   if ! has_cmd systemctl || [[ ! -d /run/systemd/system ]]; then
-    die "This installer currently supports systemd only."
+    die "当前安装脚本仅支持 systemd。"
   fi
 }
 
@@ -148,13 +148,87 @@ service_enable_start() {
   systemctl enable --now "$SERVICE_NAME"
 }
 
+get_env_key() {
+  local key="$1"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return
+  fi
+  grep -E "^${key}=" "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '\r' | xargs || true
+}
+
+get_bind_host() {
+  local host
+  host="$(get_env_key FRP_MANAGER_HOST)"
+  if [[ -z "$host" ]]; then
+    host="0.0.0.0"
+  fi
+  echo "$host"
+}
+
+get_port() {
+  local port
+  port="$(get_env_key FRP_MANAGER_PORT)"
+  if [[ -z "$port" ]]; then
+    port="5000"
+  fi
+  echo "$port"
+}
+
+detect_local_ip() {
+  local ip=""
+  if has_cmd ip; then
+    ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src"){print $(i+1); exit}}')"
+  fi
+  if [[ -z "$ip" ]] && has_cmd hostname; then
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  echo "${ip:-127.0.0.1}"
+}
+
+detect_public_ip() {
+  if ! has_cmd curl; then
+    return
+  fi
+  curl -fsS --max-time 3 https://api.ipify.org 2>/dev/null || true
+}
+
+show_access_urls() {
+  local bind_host port local_ip public_ip
+  bind_host="$(get_bind_host)"
+  port="$(get_port)"
+  local_ip="$(detect_local_ip)"
+  public_ip="$(detect_public_ip)"
+
+  echo "----------------------------------------"
+  echo "服务名：${SERVICE_NAME}"
+  echo "配置文件：${ENV_FILE}"
+  echo "监听地址：${bind_host}"
+  echo "监听端口：${port}"
+
+  if [[ "$bind_host" != "0.0.0.0" && "$bind_host" != "::" ]]; then
+    echo "访问地址：http://${bind_host}:${port}/"
+    echo "首次初始化：http://${bind_host}:${port}/setup"
+    echo "登录页面：http://${bind_host}:${port}/login"
+    echo "----------------------------------------"
+    return
+  fi
+
+  echo "内网地址：http://${local_ip}:${port}/"
+  if [[ -n "$public_ip" && "$public_ip" != "$local_ip" ]]; then
+    echo "公网地址：http://${public_ip}:${port}/"
+  fi
+  echo "首次初始化：http://${local_ip}:${port}/setup"
+  echo "登录页面：http://${local_ip}:${port}/login"
+  echo "----------------------------------------"
+}
+
 main() {
   require_root
   ensure_systemd
   install_python_dependencies
 
   if [[ ! -f "$APP_DIR/requirements.txt" ]]; then
-    die "requirements.txt not found in ${APP_DIR}"
+    die "未找到 requirements.txt：${APP_DIR}"
   fi
 
   ensure_env_file
@@ -162,9 +236,8 @@ main() {
   write_systemd_service
   service_enable_start
 
-  log "Install complete."
-  log "Service: ${SERVICE_NAME}"
-  log "Config: ${ENV_FILE}"
+  log "安装完成。"
+  show_access_urls
 }
 
 main "$@"
