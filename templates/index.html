@@ -14,16 +14,24 @@
                 <span class="logo-icon">⚡</span>
                 <span class="logo-text">FRP 管理面板</span>
             </div>
-            <nav class="nav-tabs">
-                <button class="nav-tab active" data-tab="frps">
-                    <span class="tab-icon">🖥️</span>
-                    FRPS 服务器
-                </button>
-                <button class="nav-tab" data-tab="terminal">
-                    <span class="tab-icon">⌨️</span>
-                    终端
-                </button>
-            </nav>
+            <div class="header-right">
+                <nav class="nav-tabs">
+                    <button class="nav-tab active" data-tab="frps">
+                        <span class="tab-icon">🖥️</span>
+                        FRPS 服务器
+                    </button>
+                    <button class="nav-tab" data-tab="terminal">
+                        <span class="tab-icon">⌨️</span>
+                        终端
+                    </button>
+                </nav>
+                <div class="auth-panel">
+                    <span class="auth-user">管理员：{{ admin_user }}</span>
+                    <form method="post" action="/logout">
+                        <button type="submit" class="btn btn-outline btn-sm">退出登录</button>
+                    </form>
+                </div>
+            </div>
         </header>
 
         <main class="main-content">

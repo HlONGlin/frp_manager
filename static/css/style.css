@@ -48,6 +48,14 @@ body {
     z-index: 100;
 }
 
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .logo {
     display: flex;
     align-items: center;
@@ -76,6 +84,21 @@ body {
 .nav-tabs {
     display: flex;
     gap: 8px;
+}
+
+.auth-panel {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.auth-user {
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 10px;
 }
 
 .nav-tab {
@@ -773,6 +796,11 @@ body {
     .header {
         flex-direction: column;
         gap: 16px;
+    }
+
+    .header-right {
+        width: 100%;
+        justify-content: space-between;
     }
     
     .nav-tabs {

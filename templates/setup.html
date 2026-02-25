@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>首次初始化 - FRP 管理面板</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+</head>
+<body>
+    <div class="auth-shell">
+        <section class="auth-brand">
+            <div>
+                <h1>首次使用<br>请先创建管理员账号</h1>
+                <p>初始化后才能访问 FRPS 列表、端口映射和一键部署能力。</p>
+                <ul class="auth-list">
+                    <li>账号: 3-32 位，支持字母/数字/._-</li>
+                    <li>密码: 8-128 位，请设置强密码</li>
+                    <li>初始化成功后将自动登录</li>
+                </ul>
+            </div>
+            <p class="auth-footnote">FRP Manager Setup Wizard</p>
+        </section>
+
+        <section class="auth-card">
+            <h2>管理员初始化</h2>
+            <p>这一步只会在第一次打开时出现。</p>
+
+            {% if error %}
+            <div class="auth-error">{{ error }}</div>
+            {% endif %}
+
+            <form method="post" action="/setup">
+                <div class="form-group">
+                    <label for="username">管理员账号</label>
+                    <input id="username" name="username" type="text" required autocomplete="username" value="{{ username }}">
+                </div>
+                <div class="form-group">
+                    <label for="password">管理员密码</label>
+                    <input id="password" name="password" type="password" required autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="confirm_password">确认密码</label>
+                    <input id="confirm_password" name="confirm_password" type="password" required autocomplete="new-password">
+                </div>
+                <button type="submit" class="auth-btn">完成初始化并进入面板</button>
+            </form>
+        </section>
+    </div>
+</body>
+</html>

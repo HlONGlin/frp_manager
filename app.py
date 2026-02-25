@@ -1,10 +1,12 @@
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
+import re
 import socket
 import sys
 import threading
 import time
+from werkzeug.security import check_password_hash, generate_password_hash
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -15,9 +17,12 @@ from utils.config_manager import (
     delete_frps_server,
     delete_port_mapping,
     get_frpc_configs,
+    get_auth_config,
     get_frps_server,
     get_frps_servers,
+    is_auth_initialized,
     save_frpc_config,
+    set_admin_credentials,
     update_frps_server,
     update_port_mapping,
 )
@@ -38,9 +43,16 @@ from utils.validators import (
 STATUS_TIMEOUT = float(os.environ.get('FRP_STATUS_TIMEOUT', '1.0'))
 STATUS_CACHE_TTL = float(os.environ.get('FRP_STATUS_CACHE_TTL', '20'))
 STATUS_WORKERS = int(os.environ.get('FRP_STATUS_WORKERS', '16'))
+SESSION_USER_KEY = 'admin_user'
+USERNAME_PATTERN = re.compile(r'^[A-Za-z0-9_.-]{3,32}$')
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 128
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FRP_MANAGER_SECRET_KEY') or os.urandom(32).hex()
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FRP_SESSION_SECURE', '0') == '1'
 status_cache = {}
 status_cache_lock = threading.Lock()
 
@@ -63,6 +75,29 @@ def parse_json_body():
     if not isinstance(body, dict):
         raise ValidationError('JSON body must be an object')
     return body
+
+
+def get_logged_in_user():
+    return str(session.get(SESSION_USER_KEY, '')).strip()
+
+
+def is_logged_in():
+    return bool(get_logged_in_user())
+
+
+def validate_auth_payload(username, password, confirm_password=None):
+    normalized_username = str(username or '').strip()
+    normalized_password = str(password or '')
+    normalized_confirm = str(confirm_password or '')
+
+    if not USERNAME_PATTERN.fullmatch(normalized_username):
+        raise ValidationError('用户名需为 3-32 位，支持字母/数字/._-')
+    if len(normalized_password) < MIN_PASSWORD_LENGTH or len(normalized_password) > MAX_PASSWORD_LENGTH:
+        raise ValidationError(f'密码长度需在 {MIN_PASSWORD_LENGTH}-{MAX_PASSWORD_LENGTH} 位之间')
+    if confirm_password is not None and normalized_password != normalized_confirm:
+        raise ValidationError('两次输入的密码不一致')
+
+    return normalized_username, normalized_password
 
 
 def get_local_ip():
@@ -174,9 +209,121 @@ def handle_internal_error(_error):
     return _error
 
 
+@app.before_request
+def enforce_auth_flow():
+    endpoint = request.endpoint or ''
+    path = request.path or ''
+    is_report_callback = path.startswith('/api/frps/server/') and path.endswith('/report')
+
+    if endpoint == 'static':
+        return None
+
+    setup_done = is_auth_initialized()
+    api_request = path.startswith('/api/')
+
+    auth_allowed_paths = {
+        '/login',
+        '/setup',
+        '/logout',
+    }
+    auth_allowed_api_paths = {
+        '/api/auth/status',
+    }
+
+    if not setup_done:
+        if api_request and path not in auth_allowed_api_paths and not is_report_callback:
+            return error_response('管理员账号未初始化，请先完成首次设置', 403)
+        if not api_request and path != '/setup':
+            return redirect(url_for('setup_page'))
+        return None
+
+    if path == '/setup':
+        return redirect(url_for('index'))
+
+    if path in auth_allowed_paths or path in auth_allowed_api_paths or is_report_callback:
+        return None
+
+    if is_logged_in():
+        return None
+
+    if api_request:
+        return error_response('未登录或登录已过期', 401)
+    return redirect(url_for('login_page'))
+
+
+@app.route('/setup', methods=['GET', 'POST'])
+def setup_page():
+    if is_auth_initialized():
+        if is_logged_in():
+            return redirect(url_for('index'))
+        return redirect(url_for('login_page'))
+
+    if request.method == 'GET':
+        return render_template('setup.html', error=None, username='')
+
+    username = request.form.get('username', '')
+    password = request.form.get('password', '')
+    confirm_password = request.form.get('confirm_password', '')
+
+    try:
+        normalized_username, normalized_password = validate_auth_payload(username, password, confirm_password)
+    except ValidationError as error:
+        return render_template('setup.html', error=str(error), username=str(username or '').strip()), 422
+
+    password_hash = generate_password_hash(normalized_password)
+    set_admin_credentials(normalized_username, password_hash)
+    session[SESSION_USER_KEY] = normalized_username
+    return redirect(url_for('index'))
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if not is_auth_initialized():
+        return redirect(url_for('setup_page'))
+
+    if request.method == 'GET':
+        if is_logged_in():
+            return redirect(url_for('index'))
+        return render_template('login.html', error=None, username='')
+
+    username = str(request.form.get('username', '')).strip()
+    password = str(request.form.get('password', ''))
+    auth = get_auth_config()
+
+    if not username or not password:
+        return render_template('login.html', error='请输入账号和密码', username=username), 422
+    if username != str(auth.get('admin_username', '')).strip():
+        return render_template('login.html', error='账号或密码错误', username=username), 401
+    if not check_password_hash(str(auth.get('password_hash', '')), password):
+        return render_template('login.html', error='账号或密码错误', username=username), 401
+
+    session[SESSION_USER_KEY] = username
+    return redirect(url_for('index'))
+
+
+@app.route('/logout', methods=['GET', 'POST'])
+def logout():
+    session.pop(SESSION_USER_KEY, None)
+    if request.path.startswith('/api/'):
+        return success_response()
+    if is_auth_initialized():
+        return redirect(url_for('login_page'))
+    return redirect(url_for('setup_page'))
+
+
+@app.route('/api/auth/status', methods=['GET'])
+def auth_status():
+    setup_done = is_auth_initialized()
+    return success_response({
+        'setup_completed': setup_done,
+        'logged_in': is_logged_in(),
+        'admin_user': get_logged_in_user() if is_logged_in() else '',
+    })
+
+
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', admin_user=get_logged_in_user())
 
 
 @app.route('/api/meta/local-ip', methods=['GET'])

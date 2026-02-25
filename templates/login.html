@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - FRP 管理面板</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+</head>
+<body>
+    <div class="auth-shell">
+        <section class="auth-brand">
+            <div>
+                <h1>FRP 管理面板<br>管理员登录</h1>
+                <p>登录后可查看 FRPS 运行状态、管理端口映射并生成部署命令。</p>
+                <ul class="auth-list">
+                    <li>保护控制面板，避免未授权访问</li>
+                    <li>会话过期后需重新登录</li>
+                    <li>如忘记密码，请重置配置文件中的 auth 字段</li>
+                </ul>
+            </div>
+            <p class="auth-footnote">FRP Manager Login</p>
+        </section>
+
+        <section class="auth-card">
+            <h2>管理员登录</h2>
+            <p>请输入初始化时设置的账号密码。</p>
+
+            {% if error %}
+            <div class="auth-error">{{ error }}</div>
+            {% endif %}
+
+            <form method="post" action="/login">
+                <div class="form-group">
+                    <label for="username">管理员账号</label>
+                    <input id="username" name="username" type="text" required autocomplete="username" value="{{ username }}">
+                </div>
+                <div class="form-group">
+                    <label for="password">管理员密码</label>
+                    <input id="password" name="password" type="password" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="auth-btn">登录</button>
+            </form>
+        </section>
+    </div>
+</body>
+</html>

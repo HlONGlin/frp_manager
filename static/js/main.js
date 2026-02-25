@@ -694,6 +694,15 @@ async function apiRequest(url, options = {}) {
     const contentType = response.headers.get('content-type') || '';
     const payload = contentType.includes('application/json') ? await response.json() : null;
 
+    if (response.status === 401) {
+        window.location.href = '/login';
+        throw new Error(payload?.message || '登录已过期，请重新登录');
+    }
+    if (response.status === 403 && payload?.message?.includes('初始化')) {
+        window.location.href = '/setup';
+        throw new Error(payload?.message || '请先完成管理员初始化');
+    }
+
     if (!response.ok) {
         const message = payload?.message || `请求失败 (${response.status})`;
         throw new Error(message);
