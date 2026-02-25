@@ -11,5 +11,9 @@ from .config_manager import (
     delete_port_mapping,
     get_frpc_configs,
     save_frpc_config,
-    delete_frpc_config
+    delete_frpc_config,
+    get_auth_config,
+    is_auth_initialized,
+    set_admin_credentials,
+    clear_admin_credentials
 )
