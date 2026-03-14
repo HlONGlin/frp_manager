@@ -446,12 +446,13 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
 
     return (
         "mkdir -p /opt/frp && cd /opt/frp && "
-        f"wget -O frpc.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME} && "
+        f"(command -v wget >/dev/null 2>&1 && wget -O frpc.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME} || curl -fsSL {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME} -o frpc.tar.gz) && "
         "tar -xzf frpc.tar.gz && "
         f"cd {LINUX_FOLDER_NAME} && "
         f"printf %s {_shell_single_quote(config_b64)} | base64 -d > {config_name} && "
         f"nohup ./frpc -c {config_name} >/dev/null 2>&1 & sleep 1 && "
-        f"pgrep -f {_shell_single_quote(f'frpc -c {config_name}')} >/dev/null && "
+        f"((command -v pgrep >/dev/null 2>&1 && pgrep -f {_shell_single_quote(f'frpc -c {config_name}')} >/dev/null) || "
+        f"(command -v pgrep >/dev/null 2>&1 || ps -ef | grep -F -- {_shell_single_quote(f'frpc -c {config_name}')} | grep -v grep >/dev/null)) && "
         f"echo \"FRPC 已启动！ 安全档位: {profile_summary['label']}\" && {target_line} || "
         "(echo \"FRPC 进程未正常启动，请检查配置、密钥或网络连通性。\" >&2; exit 1)"
     )

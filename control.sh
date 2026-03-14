@@ -32,7 +32,6 @@ BOOTSTRAP_DIR="${BOOTSTRAP_DIR:-/opt/frp-manager}"
 BOOTSTRAP_FORCE_UPDATE="${BOOTSTRAP_FORCE_UPDATE:-0}"
 KEEP_LOCAL_DB_ON_UPDATE="${KEEP_LOCAL_DB_ON_UPDATE:-0}"
 AGENT_MENU_ENABLED="${AGENT_MENU_ENABLED:-0}"
-NONINTERACTIVE_DEFAULT_ACTION="${NONINTERACTIVE_DEFAULT_ACTION:-install}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -857,6 +856,7 @@ require_deployed_env() {
 
 do_install() {
   require_root
+  local repo_state=1
 
   if is_bootstrap_mode; then
     sync_repo_to_bootstrap_dir
@@ -865,6 +865,23 @@ do_install() {
   fi
 
   if [[ -d "$APP_DIR/.git" ]]; then
+    if repo_has_local_changes "$APP_DIR"; then
+      repo_state=0
+    else
+      repo_state="$?"
+    fi
+
+    if [[ "$repo_state" -eq 2 ]]; then
+      warn "无法检查本地仓库状态，继续安装当前代码。"
+    elif [[ "$repo_state" -eq 0 && "$BOOTSTRAP_FORCE_UPDATE" != "1" ]]; then
+      BOOTSTRAP_FORCE_UPDATE="1"
+      if [[ "$KEEP_LOCAL_DB_ON_UPDATE" == "1" ]]; then
+        warn "检测到本地改动，已自动开启强制同步（保留 config.env 与 frp_manager/config.json）。"
+      else
+        warn "检测到本地改动，已自动开启强制同步（保留 config.env，并以 GitHub 最新 config.json 覆盖本地数据库；管理员账号会自动保留）。"
+      fi
+    fi
+
     log "检测到本地仓库，正在同步 GitHub 最新代码与数据库..."
     if ! sync_repo_to_origin "$APP_DIR"; then
       warn "仓库同步失败，继续使用当前本地文件执行安装。"
@@ -1487,9 +1504,9 @@ main() {
   fi
 
   if ! is_interactive_terminal; then
-    log "检测到非交互终端，自动执行：${NONINTERACTIVE_DEFAULT_ACTION}"
-    run_cli_action "$NONINTERACTIVE_DEFAULT_ACTION"
-    return
+    warn "检测到非交互终端：已禁用默认自动操作，请显式传入 action。"
+    run_cli_action help
+    return 1
   fi
 
   while true; do

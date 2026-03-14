@@ -1349,7 +1349,17 @@ def check_port_mapping(server_id, port_id):
         domain = str(port.get('domain', '')).strip()
         if not domain:
             return finish_check(False, '未配置域名，无法进行 HTTP/HTTPS 探测', protocol)
-        target = f'{protocol}://{domain}'
+        if protocol == 'https':
+            target_port = int(server.get('vhost_https_port') or 443)
+            default_port = 443
+        else:
+            target_port = int(server.get('vhost_http_port') or 80)
+            default_port = 80
+
+        if target_port != default_port:
+            target = f'{protocol}://{domain}:{target_port}'
+        else:
+            target = f'{protocol}://{domain}'
         ok, message = check_http_connectivity(target, timeout=4.0)
         return finish_check(ok, message, protocol, target=target)
 

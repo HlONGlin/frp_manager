@@ -39,8 +39,8 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 ```
 
 说明：
-- 在 `curl | bash` 这类非交互场景下，控制器会自动执行 `install`（可用 `NONINTERACTIVE_DEFAULT_ACTION` 覆盖）。
-- 也可显式传入 action：`curl -fsSL .../control.sh | sudo bash -s -- status`。
+- 在 `curl | bash` 这类非交互场景下，控制器不会自动执行安装；请显式传入 action。
+- 示例：`curl -fsSL .../control.sh | sudo bash -s -- install` 或 `curl -fsSL .../control.sh | sudo bash -s -- status`。
 
 控制器菜单支持：
 
