@@ -172,8 +172,18 @@ install_python_venv() {
     "$PYTHON_BIN" -m venv "$VENV_DIR"
   fi
 
-  "$VENV_DIR/bin/pip" install --upgrade pip wheel
-  "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
+  if [[ ! -x "$VENV_DIR/bin/pip" ]]; then
+    "$VENV_DIR/bin/python" -m ensurepip --upgrade || true
+  fi
+
+  if [[ -x "$VENV_DIR/bin/pip" ]]; then
+    "$VENV_DIR/bin/pip" install --upgrade pip wheel
+    "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
+    return
+  fi
+
+  "$VENV_DIR/bin/python" -m pip install --upgrade pip wheel
+  "$VENV_DIR/bin/python" -m pip install -r "$APP_DIR/requirements.txt"
 }
 
 write_systemd_service() {
