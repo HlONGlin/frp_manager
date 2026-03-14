@@ -35,11 +35,12 @@ frp_manager/
 在 Linux 服务器执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.sh -o /tmp/frp-manager-control.sh && sudo bash /tmp/frp-manager-control.sh
 ```
 
 说明：
 - `control.sh` 默认采用数字菜单模式（交互式）。
+- 上面的命令会直接进入数字菜单界面。
 - 在 `curl | bash` 这类非交互场景下不会自动执行任何安装动作。
 - 推荐方式：先下载到服务器后执行 `sudo bash control.sh`，再按数字选择操作。
 

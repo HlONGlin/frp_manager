@@ -386,7 +386,10 @@ service_is_running() {
 service_exists() {
   case "$SERVICE_MGR" in
     systemd)
-      systemctl list-unit-files | grep -qE "^${SERVICE_NAME}\.service[[:space:]]"
+      if [[ -f "$SERVICE_FILE_SYSTEMD" ]]; then
+        return 0
+      fi
+      systemctl list-unit-files 2>/dev/null | grep -qE "^${SERVICE_NAME}\.service[[:space:]]"
       ;;
     openrc)
       [[ -f "$SERVICE_FILE_OPENRC" ]]
@@ -408,7 +411,12 @@ project_status_text() {
   fi
   service_rc=$?
 
-  if [[ "$service_rc" -ne 1 ]]; then
+  if service_exists; then
+    echo "已停止"
+    return
+  fi
+
+  if [[ "$service_rc" -ne 1 && "$service_rc" -ne 3 ]]; then
     echo "未知"
     return
   fi
@@ -894,6 +902,12 @@ do_install() {
     log "安装/更新完成，服务运行正常。"
   else
     warn "安装/更新完成，但服务未运行，请查看状态与日志。"
+    if service_exists; then
+      service_status || true
+      echo "----------------------------------------"
+      echo "最近日志（120 行）"
+      show_logs || true
+    fi
   fi
   show_access_urls
 }
