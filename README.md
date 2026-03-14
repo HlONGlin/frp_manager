@@ -39,8 +39,9 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 ```
 
 说明：
-- 在 `curl | bash` 这类非交互场景下，控制器不会自动执行安装；请显式传入 action。
-- 示例：`curl -fsSL .../control.sh | sudo bash -s -- install` 或 `curl -fsSL .../control.sh | sudo bash -s -- status`。
+- `control.sh` 默认采用数字菜单模式（交互式）。
+- 在 `curl | bash` 这类非交互场景下不会自动执行任何安装动作。
+- 推荐方式：先下载到服务器后执行 `sudo bash control.sh`，再按数字选择操作。
 
 控制器菜单支持：
 
@@ -59,8 +60,8 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 13. 恢复配置（从备份包恢复）
 14. 查看最新备份详情（时间、大小、包含文件）
 
-命令行 action（适合自动化）：
-- `bash control.sh install|update|start|restart|stop|status|urls|logs|health|backup|backup-info|reset-admin`
+如需启用命令行 action（自动化场景），可设置 `CONTROL_MENU_ONLY=0` 后使用：
+- `CONTROL_MENU_ONLY=0 bash control.sh install|update|start|restart|stop|status|urls|logs|health|backup|backup-info|reset-admin`
 
 更新策略说明：
 - 每次在控制器执行“1) 安装或更新”时，会同步 GitHub 最新仓库内容。

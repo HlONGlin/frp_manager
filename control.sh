@@ -32,6 +32,7 @@ BOOTSTRAP_DIR="${BOOTSTRAP_DIR:-/opt/frp-manager}"
 BOOTSTRAP_FORCE_UPDATE="${BOOTSTRAP_FORCE_UPDATE:-0}"
 KEEP_LOCAL_DB_ON_UPDATE="${KEEP_LOCAL_DB_ON_UPDATE:-0}"
 AGENT_MENU_ENABLED="${AGENT_MENU_ENABLED:-0}"
+CONTROL_MENU_ONLY="${CONTROL_MENU_ONLY:-1}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -1499,13 +1500,16 @@ main() {
   fi
 
   if [[ "$#" -gt 0 ]]; then
+    if [[ "$CONTROL_MENU_ONLY" == "1" ]]; then
+      warn "当前为数字菜单模式，请直接运行：bash control.sh"
+      return 1
+    fi
     run_cli_action "$1"
     return
   fi
 
   if ! is_interactive_terminal; then
-    warn "检测到非交互终端：已禁用默认自动操作，请显式传入 action。"
-    run_cli_action help
+    warn "检测到非交互终端：当前为数字菜单模式，请在交互式终端运行 bash control.sh。"
     return 1
   fi
 
