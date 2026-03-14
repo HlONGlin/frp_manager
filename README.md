@@ -74,6 +74,10 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 3. 启动 FRPS。
 4. 回报 FRPS 实际地址到面板，并启动后台重试回报。
 
+端口分配说明：
+- 部署脚本会优先为服务端口、HTTP 端口、HTTPS 端口、仪表盘端口选择随机可用端口。
+- 如果在服务端设置中勾选“锁定 HTTPS 端口”，则 HTTPS 端口按你配置值固定，不参与随机分配。
+
 ## FRPC 一键部署
 
 在端口映射中可为 Linux/Windows 生成 FRPC 一键部署命令。

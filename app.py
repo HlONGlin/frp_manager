@@ -979,6 +979,12 @@ def report_frps(server_id):
         updates_payload['server_addr'] = payload.get('server_addr')
     if 'server_port' in payload:
         updates_payload['server_port'] = payload.get('server_port')
+    if 'vhost_http_port' in payload:
+        updates_payload['vhost_http_port'] = payload.get('vhost_http_port')
+    if 'vhost_https_port' in payload:
+        updates_payload['vhost_https_port'] = payload.get('vhost_https_port')
+    if 'dashboard_port' in payload:
+        updates_payload['dashboard_port'] = payload.get('dashboard_port')
 
     if updates_payload:
         updates = validate_server_update(updates_payload)

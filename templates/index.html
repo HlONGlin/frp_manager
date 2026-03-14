@@ -216,6 +216,12 @@
                 <div class="form-group">
                     <label>HTTPS 端口</label>
                     <input type="number" name="vhost_https_port" value="443">
+                    <div style="margin-top: 8px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" name="lock_https_port" style="width: auto;">
+                            <span>锁定 HTTPS 端口（部署时不随机）</span>
+                        </label>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>仪表盘密码</label>

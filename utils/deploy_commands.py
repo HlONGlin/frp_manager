@@ -188,7 +188,7 @@ URLS
 
 report_to_manager() {{
     local manager_url endpoint payload
-    payload='{{"token":"'"$FRPS_TOKEN"'","server_addr":"'"$REPORTED_IP"'","server_port":{_value(server.get('server_port'))}}}'
+    payload='{{"token":"'"$FRPS_TOKEN"'","server_addr":"'"$REPORTED_IP"'","server_port":'"$ACTUAL_SERVER_PORT"',"vhost_http_port":'"$ACTUAL_HTTP_PORT"',"vhost_https_port":'"$ACTUAL_HTTPS_PORT"',"dashboard_port":'"$ACTUAL_DASHBOARD_PORT"'}}'
 
     while IFS= read -r manager_url; do
         [ -z "$manager_url" ] && continue
@@ -252,13 +252,26 @@ fi
 """
 
     return f"""# FRPS 一键部署命令
+set -euo pipefail
+
 mkdir -p /opt/frp && cd /opt/frp
 wget -O frps.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME}
 tar -xzf frps.tar.gz
 cd {LINUX_FOLDER_NAME}
 FRPS_TOKEN={_shell_single_quote(server.get('token'))}
+LOCK_HTTPS_PORT={'1' if bool(server.get('lock_https_port', False)) else '0'}
+CONFIG_SERVER_PORT={_value(server.get('server_port'))}
+CONFIG_HTTP_PORT={_value(server.get('vhost_http_port'))}
+CONFIG_HTTPS_PORT={_value(server.get('vhost_https_port'))}
+CONFIG_DASHBOARD_PORT={_value(server.get('dashboard_port'))}
 
-REPORTED_IP="$(hostname -I 2>/dev/null | awk '{{print $1}}')"
+REPORTED_IP=""
+if command -v ip >/dev/null 2>&1; then
+    REPORTED_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{{for(i=1;i<=NF;i++) if ($i=="src"){{print $(i+1); exit}}}}')"
+fi
+if [ -z "$REPORTED_IP" ]; then
+    REPORTED_IP="$(hostname -I 2>/dev/null | awk '{{print $1}}')"
+fi
 if command -v curl >/dev/null 2>&1; then
     PUBLIC_IP="$(curl -s --max-time 3 https://api.ipify.org || true)"
     if [ -n "$PUBLIC_IP" ]; then
@@ -267,6 +280,73 @@ if command -v curl >/dev/null 2>&1; then
 fi
 if [ -z "$REPORTED_IP" ]; then
     REPORTED_IP="127.0.0.1"
+fi
+
+port_in_use() {{
+    local target_port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -lnt 2>/dev/null | awk '{{print $4}}' | grep -Eq "[:.]${{target_port}}$"
+        return $?
+    fi
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -lnt 2>/dev/null | awk '{{print $4}}' | grep -Eq "[:.]${{target_port}}$"
+        return $?
+    fi
+    return 1
+}}
+
+random_port() {{
+    local min_port="$1"
+    local max_port="$2"
+    local range=$((max_port - min_port + 1))
+    local seed
+    if command -v od >/dev/null 2>&1; then
+        seed="$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' ' || true)"
+    fi
+    if [ -z "$seed" ]; then
+        seed="$RANDOM"
+    fi
+    echo $(( (seed % range) + min_port ))
+}}
+
+pick_available_port() {{
+    local preferred="$1"
+    local min_port="$2"
+    local max_port="$3"
+
+    if [ -n "$preferred" ] && ! port_in_use "$preferred"; then
+        echo "$preferred"
+        return 0
+    fi
+
+    local attempt candidate
+    for attempt in $(seq 1 80); do
+        candidate="$(random_port "$min_port" "$max_port")"
+        if ! port_in_use "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}}
+
+ACTUAL_SERVER_PORT="$(pick_available_port "" 20000 39999 || true)"
+ACTUAL_HTTP_PORT="$(pick_available_port "" 10080 19999 || true)"
+ACTUAL_DASHBOARD_PORT="$(pick_available_port "" 30000 49999 || true)"
+
+if [ "$LOCK_HTTPS_PORT" = "1" ]; then
+    ACTUAL_HTTPS_PORT="$CONFIG_HTTPS_PORT"
+    if port_in_use "$ACTUAL_HTTPS_PORT"; then
+        echo "HTTPS 端口已锁定为 $ACTUAL_HTTPS_PORT，但该端口已被占用。"
+        exit 1
+    fi
+else
+    ACTUAL_HTTPS_PORT="$(pick_available_port "" 10443 20999 || true)"
+fi
+
+if [ -z "$ACTUAL_SERVER_PORT" ] || [ -z "$ACTUAL_HTTP_PORT" ] || [ -z "$ACTUAL_HTTPS_PORT" ] || [ -z "$ACTUAL_DASHBOARD_PORT" ]; then
+    echo "无法分配可用端口，请检查系统端口占用。"
+    exit 1
 fi
 
 if command -v pgrep >/dev/null 2>&1 && pgrep -x frps >/dev/null 2>&1; then
@@ -282,10 +362,10 @@ fi
 
 cat > frps.ini << 'EOF'
 [common]
-bind_port = {_value(server.get('server_port'))}
-vhost_http_port = {_value(server.get('vhost_http_port'))}
-vhost_https_port = {_value(server.get('vhost_https_port'))}
-dashboard_port = {_value(server.get('dashboard_port'))}
+bind_port = $ACTUAL_SERVER_PORT
+vhost_http_port = $ACTUAL_HTTP_PORT
+vhost_https_port = $ACTUAL_HTTPS_PORT
+dashboard_port = $ACTUAL_DASHBOARD_PORT
 dashboard_user = {_value(server.get('dashboard_user'))}
 dashboard_pwd = {_value(server.get('dashboard_pwd'))}
 token = $FRPS_TOKEN
@@ -293,7 +373,7 @@ allow_ports = 2000-30000
 EOF
 
 nohup ./frps -c frps.ini >/tmp/frps.log 2>&1 &
-sleep 1
+sleep 2
 
 if command -v pgrep >/dev/null 2>&1 && ! pgrep -x frps >/dev/null 2>&1; then
     echo "FRPS 启动失败，请检查 /tmp/frps.log"
@@ -301,9 +381,21 @@ if command -v pgrep >/dev/null 2>&1 && ! pgrep -x frps >/dev/null 2>&1; then
     exit 1
 fi
 
+if grep -qiE "create server listener error|bind: address already in use" /tmp/frps.log 2>/dev/null; then
+    echo "FRPS 启动失败：端口冲突或监听失败"
+    tail -n 50 /tmp/frps.log || true
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -x frps || true
+    fi
+    exit 1
+fi
+
 echo "FRPS 部署完成！"
 echo "FRPS 服务器地址: $REPORTED_IP"
-echo "仪表盘地址: http://$REPORTED_IP:{_value(server.get('dashboard_port'))}"
+echo "服务端口: $ACTUAL_SERVER_PORT"
+echo "HTTP 端口: $ACTUAL_HTTP_PORT"
+echo "HTTPS 端口: $ACTUAL_HTTPS_PORT"
+echo "仪表盘地址: http://$REPORTED_IP:$ACTUAL_DASHBOARD_PORT"
 echo "用户名: {_value(server.get('dashboard_user'))}"
 echo "密码: {_value(server.get('dashboard_pwd'))}"
 {callback_echo_line}

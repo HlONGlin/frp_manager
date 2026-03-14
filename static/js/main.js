@@ -1168,6 +1168,7 @@ function openFRPSModal(server = null) {
         form.dashboard_port.value = server.dashboard_port || 7500;
         form.vhost_http_port.value = server.vhost_http_port || 80;
         form.vhost_https_port.value = server.vhost_https_port || 443;
+        form.lock_https_port.checked = Boolean(server.lock_https_port);
         form.dashboard_user.value = server.dashboard_user || 'admin';
         form.dashboard_pwd.value = server.dashboard_pwd || 'admin';
     } else {
@@ -1180,6 +1181,7 @@ function openFRPSModal(server = null) {
         form.dashboard_port.value = 7500;
         form.vhost_http_port.value = 80;
         form.vhost_https_port.value = 443;
+        form.lock_https_port.checked = false;
         form.dashboard_user.value = 'admin';
         form.dashboard_pwd.value = 'admin';
     }
@@ -1248,6 +1250,7 @@ async function saveFRPSServer(event) {
         dashboard_pwd: form.dashboard_pwd.value,
         vhost_http_port: asInt(form.vhost_http_port.value),
         vhost_https_port: asInt(form.vhost_https_port.value),
+        lock_https_port: Boolean(form.lock_https_port.checked),
     };
     const tokenValue = form.token.value.trim();
     if (tokenValue) {

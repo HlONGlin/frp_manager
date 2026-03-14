@@ -19,6 +19,7 @@ SERVER_FIELDS = {
     'dashboard_pwd',
     'vhost_http_port',
     'vhost_https_port',
+    'lock_https_port',
 }
 PORT_FIELDS = {
     'name',
@@ -48,6 +49,7 @@ FIELD_LABELS = {
     'dashboard_pwd': '仪表盘密码',
     'vhost_http_port': 'HTTP 端口',
     'vhost_https_port': 'HTTPS 端口',
+    'lock_https_port': '锁定 HTTPS 端口',
     'local_ip': '本地 IP',
     'local_port': '本地端口',
     'remote_port': '远程端口',
@@ -158,6 +160,7 @@ def validate_server_create(payload, _local_ip):
         'dashboard_pwd': _as_text(payload.get('dashboard_pwd'), 'dashboard_pwd', default='admin', pattern=PASSWORD_PATTERN),
         'vhost_http_port': _as_port(payload.get('vhost_http_port'), 'vhost_http_port', default=80),
         'vhost_https_port': _as_port(payload.get('vhost_https_port'), 'vhost_https_port', default=443),
+        'lock_https_port': _as_bool(payload.get('lock_https_port'), 'lock_https_port', default=False),
     }
 
 
@@ -188,6 +191,8 @@ def validate_server_update(payload):
         updates['vhost_http_port'] = _as_port(payload.get('vhost_http_port'), 'vhost_http_port', required=True)
     if 'vhost_https_port' in payload:
         updates['vhost_https_port'] = _as_port(payload.get('vhost_https_port'), 'vhost_https_port', required=True)
+    if 'lock_https_port' in payload:
+        updates['lock_https_port'] = _as_bool(payload.get('lock_https_port'), 'lock_https_port', default=False)
 
     return updates
 
