@@ -101,6 +101,7 @@ repo_has_local_changes() {
 sync_repo_to_origin() {
   local repo_dir="$1"
   local backup_env=""
+  local backup_config_for_auth=""
   local backup_config_file=""
   local synced=0
 
@@ -115,6 +116,13 @@ sync_repo_to_origin() {
     backup_config_file="$(mktemp 2>/dev/null || true)"
     if [[ -n "$backup_config_file" ]]; then
       cp -f "$repo_dir/frp_manager/config.json" "$backup_config_file"
+    fi
+  fi
+
+  if [[ "$BOOTSTRAP_FORCE_UPDATE" == "1" && -f "$repo_dir/frp_manager/config.json" ]]; then
+    backup_config_for_auth="$(mktemp 2>/dev/null || true)"
+    if [[ -n "$backup_config_for_auth" ]]; then
+      cp -f "$repo_dir/frp_manager/config.json" "$backup_config_for_auth"
     fi
   fi
 
@@ -133,6 +141,56 @@ sync_repo_to_origin() {
     mkdir -p "$repo_dir/frp_manager"
     cp -f "$backup_config_file" "$repo_dir/frp_manager/config.json"
     rm -f "$backup_config_file"
+  elif [[ -n "$backup_config_for_auth" && -f "$backup_config_for_auth" && -f "$repo_dir/frp_manager/config.json" ]]; then
+    local python_bin
+    python_bin=""
+    if [[ -x "$repo_dir/.venv/bin/python" ]]; then
+      python_bin="$repo_dir/.venv/bin/python"
+    elif has_cmd python3; then
+      python_bin="python3"
+    elif has_cmd python; then
+      python_bin="python"
+    fi
+    if [[ -n "$python_bin" ]]; then
+      "$python_bin" - "$backup_config_for_auth" "$repo_dir/frp_manager/config.json" <<'PY'
+import json
+import sys
+
+old_path, new_path = sys.argv[1], sys.argv[2]
+
+try:
+    with open(old_path, 'r', encoding='utf-8') as f:
+        old_data = json.load(f)
+except Exception:
+    old_data = {}
+
+try:
+    with open(new_path, 'r', encoding='utf-8') as f:
+        new_data = json.load(f)
+except Exception:
+    new_data = {}
+
+old_auth = old_data.get('auth') if isinstance(old_data, dict) else None
+if isinstance(old_auth, dict):
+    initialized = bool(old_auth.get('initialized'))
+    admin_username = str(old_auth.get('admin_username', '')).strip()
+    password_hash = str(old_auth.get('password_hash', '')).strip()
+    if initialized and admin_username and password_hash and isinstance(new_data, dict):
+        new_data['auth'] = {
+            'initialized': True,
+            'admin_username': admin_username,
+            'password_hash': password_hash,
+        }
+        with open(new_path, 'w', encoding='utf-8') as f:
+            json.dump(new_data, f, ensure_ascii=False, indent=4)
+PY
+    else
+      warn "未检测到 Python，无法自动保留管理员账号配置。"
+    fi
+  fi
+
+  if [[ -n "$backup_config_for_auth" && -f "$backup_config_for_auth" ]]; then
+    rm -f "$backup_config_for_auth"
   fi
 
   [[ "$synced" -eq 1 ]]
@@ -180,7 +238,7 @@ sync_repo_to_bootstrap_dir() {
       if [[ "$KEEP_LOCAL_DB_ON_UPDATE" == "1" ]]; then
         warn "检测到本地改动，已自动开启强制同步（保留 config.env 与 frp_manager/config.json）。"
       else
-        warn "检测到本地改动，已自动开启强制同步（保留 config.env，并以 GitHub 最新 config.json 覆盖本地数据库）。"
+        warn "检测到本地改动，已自动开启强制同步（保留 config.env，并以 GitHub 最新 config.json 覆盖本地数据库；管理员账号会自动保留）。"
       fi
     fi
 

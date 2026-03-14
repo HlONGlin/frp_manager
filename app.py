@@ -50,6 +50,7 @@ from utils.config_manager import (
 from utils.deploy_commands import (
     build_frpc_config,
     build_frpc_deploy_command,
+    build_frpc_deploy_script,
     build_frps_deploy_command,
     get_security_profile_summary,
 )
@@ -335,12 +336,23 @@ def is_same_origin_request():
     return True
 
 
+def is_public_deploy_script_path(path):
+    raw_path = str(path or '').strip()
+    if not raw_path.startswith('/api/frps/server/'):
+        return False
+    if raw_path.endswith('/deploy.sh'):
+        return True
+    if raw_path.endswith('/deploy.ps1') and '/port/' in raw_path:
+        return True
+    return False
+
+
 def is_csrf_exempt_path(path):
     if path.startswith(AGENT_API_PREFIX):
         return True
     if path.startswith('/api/frps/server/') and path.endswith('/report'):
         return True
-    if path.startswith('/api/frps/server/') and path.endswith('/deploy.sh'):
+    if is_public_deploy_script_path(path):
         return True
     return False
 
@@ -504,6 +516,89 @@ def build_frps_deploy_payload(server):
     }
 
 
+def build_frpc_deploy_script_url(base_url, server_id, port_id, system, security_profile, deploy_key):
+    normalized_base = normalize_base_url(base_url)
+    normalized_server_id = str(server_id or '').strip()
+    normalized_port_id = str(port_id or '').strip()
+    normalized_system = validate_system(system)
+    normalized_profile = validate_security_profile(security_profile)
+    normalized_deploy_key = str(deploy_key or '').strip()
+    if not normalized_base or not normalized_server_id or not normalized_port_id or not normalized_deploy_key:
+        return ''
+
+    suffix = 'deploy.sh' if normalized_system == 'linux' else 'deploy.ps1'
+    return (
+        f'{normalized_base}/api/frps/server/{quote(normalized_server_id, safe="")}/port/{quote(normalized_port_id, safe="")}/{suffix}'
+        f'?security_profile={quote_plus(normalized_profile)}&deploy_key={quote_plus(normalized_deploy_key)}'
+    )
+
+
+def get_frpc_deploy_script_urls(server, port_id, system='linux', security_profile='balanced', manager_base_urls=None):
+    if not isinstance(server, dict):
+        return []
+
+    deploy_key = ensure_server_deploy_key(server)
+    server_id = str(server.get('id', '')).strip()
+    if not deploy_key or not server_id:
+        return []
+
+    candidate_base_urls = manager_base_urls if manager_base_urls is not None else get_manager_base_urls(server)
+    script_urls = []
+    seen_urls = set()
+    for base_url in candidate_base_urls:
+        script_url = build_frpc_deploy_script_url(
+            base_url,
+            server_id,
+            port_id,
+            system,
+            security_profile,
+            deploy_key,
+        )
+        if not script_url or script_url in seen_urls:
+            continue
+        seen_urls.add(script_url)
+        script_urls.append(script_url)
+    return script_urls
+
+
+def build_frpc_one_click_command(script_urls, system='linux'):
+    normalized_system = validate_system(system)
+    normalized_urls = [str(url).strip() for url in (script_urls or []) if str(url).strip()]
+    if not normalized_urls:
+        return ''
+
+    if normalized_system == 'windows':
+        if len(normalized_urls) == 1:
+            return (
+                'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+                f'"$u={shell_single_quote(normalized_urls[0])}; irm -UseBasicParsing $u | iex"'
+            )
+
+        ps_urls = ', '.join(shell_single_quote(url) for url in normalized_urls)
+        return (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            f'"$urls=@({ps_urls}); '
+            'foreach($u in $urls){ '
+            'try { irm -UseBasicParsing $u | iex; exit 0 } '
+            'catch { Write-Host (\"deploy url unreachable: \" + $u) } '
+            '}; '
+            'throw \"all deploy urls failed, check FRP_MANAGER_PUBLIC_URL or manager_url.\""'
+        )
+
+    if len(normalized_urls) == 1:
+        return f'curl -fsSL {shell_single_quote(normalized_urls[0])} | (command -v sudo >/dev/null 2>&1 && sudo bash || bash)'
+
+    joined_urls = ' '.join(shell_single_quote(url) for url in normalized_urls)
+    return (
+        f'for deploy_url in {joined_urls}; do '
+        'if curl -fsSL "$deploy_url" | (command -v sudo >/dev/null 2>&1 && sudo bash || bash); then exit 0; fi; '
+        'echo "deploy url unreachable: $deploy_url" >&2; '
+        'done; '
+        'echo "all deploy urls failed, check FRP_MANAGER_PUBLIC_URL or manager_url." >&2; '
+        'exit 1'
+    )
+
+
 def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
@@ -659,7 +754,7 @@ def enforce_auth_flow():
     endpoint = request.endpoint or ''
     path = request.path or ''
     is_report_callback = path.startswith('/api/frps/server/') and path.endswith('/report')
-    is_deploy_script = path.startswith('/api/frps/server/') and path.endswith('/deploy.sh')
+    is_deploy_script = is_public_deploy_script_path(path)
     is_agent_v1_api = path.startswith(AGENT_API_PREFIX)
 
     if endpoint == 'static':
@@ -723,8 +818,10 @@ def enforce_security_controls():
         if hit_rate_limit('setup', ip, SETUP_RATE_LIMIT, SETUP_RATE_WINDOW):
             return Response('初始化提交过于频繁，请稍后再试', status=429, mimetype='text/plain; charset=utf-8')
 
-    if path.startswith('/api/frps/server/') and path.endswith('/deploy.sh'):
+    if is_public_deploy_script_path(path):
         if hit_rate_limit('deploy_script', ip, DEPLOY_SCRIPT_RATE_LIMIT, DEPLOY_SCRIPT_RATE_WINDOW):
+            if path.endswith('/deploy.ps1'):
+                return Response('Write-Error "请求过于频繁"\nexit 1\n', status=429, mimetype='text/plain; charset=utf-8')
             return Response('echo "请求过于频繁" >&2\nexit 1\n', status=429, mimetype='text/plain; charset=utf-8')
 
     if path == '/api/agent/v1/pull' and method == 'POST':
@@ -1098,8 +1195,83 @@ def generate_frpc_deploy(server_id, port_id):
         return error_response('端口映射不存在', 404)
 
     profile_summary = get_security_profile_summary(security_profile)
-    command = build_frpc_deploy_command(server, port, system=system, security_profile=profile_summary['id'])
-    return success_response({'command': command, 'security_profile': profile_summary})
+    manager_urls = get_manager_base_urls(server)
+    deploy_urls = get_frpc_deploy_script_urls(
+        server,
+        port_id,
+        system=system,
+        security_profile=profile_summary['id'],
+        manager_base_urls=manager_urls,
+    )
+    command = build_frpc_one_click_command(deploy_urls, system=system)
+    if not command:
+        command = build_frpc_deploy_command(server, port, system=system, security_profile=profile_summary['id'])
+    return success_response(
+        {
+            'command': command,
+            'security_profile': profile_summary,
+            'deploy_url': deploy_urls[0] if deploy_urls else '',
+            'deploy_urls': deploy_urls,
+            'manager_urls': manager_urls,
+        }
+    )
+
+
+@app.route('/api/frps/server/<server_id>/port/<port_id>/deploy.sh', methods=['GET'])
+def get_frpc_deploy_script_linux(server_id, port_id):
+    return _get_frpc_deploy_script(server_id, port_id, system='linux')
+
+
+@app.route('/api/frps/server/<server_id>/port/<port_id>/deploy.ps1', methods=['GET'])
+def get_frpc_deploy_script_windows(server_id, port_id):
+    return _get_frpc_deploy_script(server_id, port_id, system='windows')
+
+
+def _get_frpc_deploy_script(server_id, port_id, system='linux'):
+    normalized_system = validate_system(system)
+    security_profile = validate_security_profile(request.args.get('security_profile', 'balanced'))
+    server = get_frps_server(server_id)
+    if not server:
+        status = 404
+        if normalized_system == 'windows':
+            return Response('Write-Error "FRPS 服务器不存在"\nexit 1\n', status=status, mimetype='text/plain; charset=utf-8')
+        return Response('echo "FRPS 服务器不存在" >&2\nexit 1\n', status=status, mimetype='text/plain; charset=utf-8')
+
+    deploy_key = str(request.headers.get('X-Deploy-Key', '')).strip() or str(request.args.get('deploy_key', '')).strip()
+    expected_key = ensure_server_deploy_key(server)
+    if not deploy_key or not expected_key or not secrets.compare_digest(deploy_key, expected_key):
+        status = 403
+        if normalized_system == 'windows':
+            return Response('Write-Error "deploy_key 无效"\nexit 1\n', status=status, mimetype='text/plain; charset=utf-8')
+        return Response('echo "deploy_key 无效" >&2\nexit 1\n', status=status, mimetype='text/plain; charset=utf-8')
+
+    addr_error = validate_server_addr_ready(server)
+    if addr_error:
+        status = 409
+        if normalized_system == 'windows':
+            return Response('Write-Error "服务器地址尚未识别，请先在目标子服务器执行 FRPS 一键部署命令"\nexit 1\n', status=status, mimetype='text/plain; charset=utf-8')
+        return Response('echo "服务器地址尚未识别，请先在目标子服务器执行 FRPS 一键部署命令" >&2\nexit 1\n', status=status, mimetype='text/plain; charset=utf-8')
+
+    port = find_port(server, port_id)
+    if not port:
+        status = 404
+        if normalized_system == 'windows':
+            return Response('Write-Error "端口映射不存在"\nexit 1\n', status=status, mimetype='text/plain; charset=utf-8')
+        return Response('echo "端口映射不存在" >&2\nexit 1\n', status=status, mimetype='text/plain; charset=utf-8')
+
+    script = build_frpc_deploy_script(
+        server,
+        port,
+        system=normalized_system,
+        security_profile=security_profile,
+    )
+    if normalized_system == 'windows':
+        body = f'{script}\n'
+    else:
+        body = '#!/usr/bin/env bash\nset -euo pipefail\n\n' + script + '\n'
+    response = Response(body, mimetype='text/plain; charset=utf-8')
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @app.route('/api/frpc/configs', methods=['GET'])

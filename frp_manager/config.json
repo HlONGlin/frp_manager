@@ -10,26 +10,7 @@
         "allow_ports": "2000-30000"
     },
     "frpc_configs": [],
-    "frps_servers": [
-        {
-            "name": "s1",
-            "server_addr": "",
-            "manager_url": "",
-            "server_port": 7000,
-            "token": "NDZAbLnbTY9J17coH8shBqaTA3EewBPU",
-            "dashboard_port": 7500,
-            "dashboard_user": "u1",
-            "dashboard_pwd": "p1",
-            "vhost_http_port": 8080,
-            "vhost_https_port": 443,
-            "lock_https_port": true,
-            "deploy_key": "UIhfjI7RBbs09SsghKZ5AyTctJGqwuo3qPzozWXFl8Lwn4HF",
-            "last_report_at": "",
-            "id": "f55c345abea8424c92aab1caf77a0ab2",
-            "status": "offline",
-            "ports": []
-        }
-    ],
+    "frps_servers": [],
     "agent": {
         "nodes": [],
         "jobs": [],

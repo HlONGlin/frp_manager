@@ -404,7 +404,7 @@ echo "密码: {_value(server.get('dashboard_pwd'))}"
 """
 
 
-def build_frpc_deploy_command(server, port, system='linux', security_profile='balanced'):
+def build_frpc_deploy_script(server, port, system='linux', security_profile='balanced'):
     profile_summary = get_security_profile_summary(security_profile)
     config = build_frpc_config(server, [port], security_profile=profile_summary['id'])
     config_b64 = base64.b64encode(config.encode('utf-8')).decode('ascii')
@@ -430,7 +430,7 @@ def build_frpc_deploy_command(server, port, system='linux', security_profile='ba
             f"Write-Host 'FRPC 部署完成！ 安全档位: {profile_summary['label']}'; "
             f"{target_line}"
         )
-        return f"powershell -NoProfile -ExecutionPolicy Bypass -Command \"{ps_script}\""
+        return ps_script
 
     if protocol in {'http', 'https'}:
         target_line = f'echo "访问地址: http://{_value(port.get("domain"))}:{_value(server.get("vhost_http_port"))}"'
@@ -449,3 +449,10 @@ def build_frpc_deploy_command(server, port, system='linux', security_profile='ba
         "nohup ./frpc -c frpc.ini >/dev/null 2>&1 & "
         f"&& echo \"FRPC 部署完成！ 安全档位: {profile_summary['label']}\" && {target_line}"
     )
+
+
+def build_frpc_deploy_command(server, port, system='linux', security_profile='balanced'):
+    script = build_frpc_deploy_script(server, port, system=system, security_profile=security_profile)
+    if system == 'windows':
+        return f"powershell -NoProfile -ExecutionPolicy Bypass -Command \"{script}\""
+    return script

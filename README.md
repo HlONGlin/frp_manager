@@ -82,9 +82,9 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 
 在端口映射中可为 Linux/Windows 生成 FRPC 一键部署命令。
 
-- Linux/Windows 均生成单段命令，可直接整段复制执行。
-- Linux 命令通过 Base64 写入 `frpc.ini`，避免多行 heredoc 粘贴失败。
-- Windows 命令使用 PowerShell 单段执行（含下载、解压、写配置、后台启动）。
+- Linux/Windows 命令均改为“部署链接模式”：命令本体只负责拉取服务端生成脚本并执行。
+- 部署链接带 `deploy_key` 鉴权，避免未授权拉取脚本。
+- Linux 命令会调用 `.../deploy.sh`；Windows 命令会调用 `.../deploy.ps1`。
 - Token 与 FRPS 保持一致，避免手工复制错误导致的 token 不匹配。
 
 ### FRPC 链路加密方案（新）
@@ -108,6 +108,8 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 - API 也可显式指定：
   - `GET /api/frps/server/<id>/generate_frpc?security_profile=balanced|hybrid|mtls`
   - `GET /api/frps/server/<id>/port/<port_id>/deploy?system=linux|windows&security_profile=balanced|hybrid|mtls`
+  - `GET /api/frps/server/<id>/port/<port_id>/deploy.sh?deploy_key=...&security_profile=...`（Linux 脚本）
+  - `GET /api/frps/server/<id>/port/<port_id>/deploy.ps1?deploy_key=...&security_profile=...`（Windows 脚本）
 
 ## 环境变量
 
