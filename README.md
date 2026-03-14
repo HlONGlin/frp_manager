@@ -106,7 +106,6 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 - `FRP_MANAGER_PORT`：面板端口，默认 `5000`
 - `FRP_MANAGER_SECRET_KEY`：会话密钥
 - `FRP_SESSION_SECURE`：HTTPS 环境建议设为 `1`
-- `FRP_SETUP_TOKEN`：首次初始化令牌（配置后 `/setup` 需要令牌）
 - `FRP_TRUST_PROXY`：是否信任 `X-Forwarded-*`（仅在反代后设为 `1`）
 - `FRP_SESSION_LIFETIME_HOURS`：登录会话有效时长（小时）
 - `FRP_LOGIN_RATE_LIMIT` / `FRP_LOGIN_RATE_WINDOW_SEC`：登录限流阈值
@@ -145,9 +144,8 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 
 1. 把面板放在 HTTPS 反向代理后，并设置 `FRP_SESSION_SECURE=1`。
 2. 生产环境必须设置 `FRP_MANAGER_SECRET_KEY`，否则重启会导致会话失效。
-3. 建议设置 `FRP_SETUP_TOKEN`，避免首次初始化被未授权用户抢占。
-4. 如使用反向代理，再设置 `FRP_TRUST_PROXY=1`；否则保持 `0`。
-5. Agent 属于高权限运维能力，请仅在可信网络内启用并妥善保管 token。
+3. 如使用反向代理，再设置 `FRP_TRUST_PROXY=1`；否则保持 `0`。
+4. Agent 属于高权限运维能力，请仅在可信网络内启用并妥善保管 token。
 
 ## Agent 编排一期（已接入 API 底座）
 

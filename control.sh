@@ -356,7 +356,7 @@ detect_public_ip() {
 }
 
 show_access_urls() {
-  local port local_ip public_ip setup_token
+  local port local_ip public_ip
   port="$(get_port)"
   local_ip="$(detect_local_ip)"
   public_ip="$(detect_public_ip)"
@@ -370,10 +370,6 @@ show_access_urls() {
   fi
   echo "首次初始化：http://${local_ip}:${port}/setup"
   echo "登录页面：http://${local_ip}:${port}/login"
-  setup_token="$(get_env_key FRP_SETUP_TOKEN)"
-  if [[ -n "$setup_token" ]]; then
-    echo "初始化令牌：$setup_token"
-  fi
   echo "----------------------------------------"
 }
 

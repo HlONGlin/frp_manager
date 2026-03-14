@@ -79,25 +79,16 @@ print(secrets.token_urlsafe(48))
 PY
 }
 
-generate_setup_token() {
-  "$PYTHON_BIN" - <<'PY'
-import secrets
-print(secrets.token_urlsafe(24))
-PY
-}
-
 ensure_env_file() {
   if [[ ! -f "$ENV_FILE" ]]; then
-    local secret setup_token
+    local secret
     secret="$(generate_secret_key)"
-    setup_token="$(generate_setup_token)"
     cat >"$ENV_FILE" <<EOF
 FRP_MANAGER_HOST=0.0.0.0
 FRP_MANAGER_PORT=5000
 FLASK_DEBUG=0
 FRP_SESSION_SECURE=0
 FRP_MANAGER_SECRET_KEY=${secret}
-FRP_SETUP_TOKEN=${setup_token}
 FRP_TRUST_PROXY=0
 FRP_SESSION_LIFETIME_HOURS=12
 FRP_LOGIN_RATE_LIMIT=10
@@ -134,9 +125,6 @@ EOF
   fi
   if ! grep -qE '^FRP_MANAGER_PUBLIC_URL=' "$ENV_FILE"; then
     printf '\nFRP_MANAGER_PUBLIC_URL=\n' >>"$ENV_FILE"
-  fi
-  if ! grep -qE '^FRP_SETUP_TOKEN=' "$ENV_FILE"; then
-    printf '\nFRP_SETUP_TOKEN=%s\n' "$(generate_setup_token)" >>"$ENV_FILE"
   fi
   if ! grep -qE '^FRP_TRUST_PROXY=' "$ENV_FILE"; then
     printf '\nFRP_TRUST_PROXY=0\n' >>"$ENV_FILE"
@@ -262,7 +250,7 @@ detect_public_ip() {
 }
 
 show_access_urls() {
-  local bind_host port local_ip public_ip setup_token
+  local bind_host port local_ip public_ip
   bind_host="$(get_bind_host)"
   port="$(get_port)"
   local_ip="$(detect_local_ip)"
@@ -278,10 +266,6 @@ show_access_urls() {
     echo "访问地址：http://${bind_host}:${port}/"
     echo "首次初始化：http://${bind_host}:${port}/setup"
     echo "登录页面：http://${bind_host}:${port}/login"
-    setup_token="$(get_env_key FRP_SETUP_TOKEN)"
-    if [[ -n "$setup_token" ]]; then
-      echo "初始化令牌：$setup_token"
-    fi
     echo "----------------------------------------"
     return
   fi
@@ -292,10 +276,6 @@ show_access_urls() {
   fi
   echo "首次初始化：http://${local_ip}:${port}/setup"
   echo "登录页面：http://${local_ip}:${port}/login"
-  setup_token="$(get_env_key FRP_SETUP_TOKEN)"
-  if [[ -n "$setup_token" ]]; then
-    echo "初始化令牌：$setup_token"
-  fi
   echo "----------------------------------------"
 }
 

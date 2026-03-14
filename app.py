@@ -778,12 +778,6 @@ def setup_page():
     password = request.form.get('password', '')
     confirm_password = request.form.get('confirm_password', '')
 
-    expected_setup_token = str(os.environ.get('FRP_SETUP_TOKEN', '')).strip()
-    if expected_setup_token:
-        supplied_setup_token = str(request.form.get('setup_token', '')).strip() or str(request.headers.get('X-Setup-Token', '')).strip()
-        if not supplied_setup_token or not secrets.compare_digest(supplied_setup_token, expected_setup_token):
-            return render_template('setup.html', error='初始化令牌无效', username=str(username or '').strip()), 403
-
     try:
         normalized_username, normalized_password = validate_auth_payload(username, password, confirm_password)
     except ValidationError as error:
