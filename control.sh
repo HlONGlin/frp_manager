@@ -386,7 +386,12 @@ service_is_running() {
 service_exists() {
   case "$SERVICE_MGR" in
     systemd)
+      local fragment_path=""
       if [[ -f "$SERVICE_FILE_SYSTEMD" ]]; then
+        return 0
+      fi
+      fragment_path="$(systemctl show -p FragmentPath --value "$SERVICE_NAME" 2>/dev/null || true)"
+      if [[ -n "$fragment_path" && "$fragment_path" != "/dev/null" && -f "$fragment_path" ]]; then
         return 0
       fi
       systemctl list-unit-files 2>/dev/null | grep -qE "^${SERVICE_NAME}\.service[[:space:]]"
@@ -665,16 +670,20 @@ run_health_check() {
   echo "项目目录：$APP_DIR"
   echo "配置文件：$ENV_FILE"
 
-  if service_exists; then
-    echo "服务文件：存在"
-  else
-    warn "服务文件不存在，可能尚未正确安装。"
-  fi
-
   if service_is_running; then
     echo "服务状态：运行中"
+    if service_exists; then
+      echo "服务文件：存在"
+    else
+      warn "服务进程在运行，但未找到可解析的 unit 文件路径。"
+    fi
   else
     warn "服务状态：未运行"
+    if service_exists; then
+      echo "服务文件：存在"
+    else
+      warn "服务文件不存在，可能尚未正确安装。"
+    fi
   fi
 
   if [[ -f "$APP_DIR/app.py" && -f "$APP_DIR/utils/config_manager.py" ]]; then

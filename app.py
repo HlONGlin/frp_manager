@@ -799,10 +799,11 @@ def build_frpc_cleanup_command(port, system='linux'):
     normalized_system = validate_system(system)
     config_name = build_frpc_config_file_name(port)
     if normalized_system == 'windows':
+        windows_root = f'frp/{WINDOWS_FOLDER_NAME}'
         return (
             'powershell -NoProfile -ExecutionPolicy Bypass -Command '
             f'"$cfg={shell_single_quote(config_name)}; '
-            f'$root=Join-Path (Resolve-Path .) {shell_single_quote(f"frp\\{WINDOWS_FOLDER_NAME}")}; '
+            f'$root=Join-Path (Resolve-Path .) {shell_single_quote(windows_root)}; '
             '$procs=Get-CimInstance Win32_Process -Filter \"Name=\'frpc.exe\'\"; '
             '$targets=$procs | Where-Object { $_.CommandLine -like (\"*\" + $cfg + \"*\") }; '
             'foreach($p in $targets){ Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }; '
@@ -821,9 +822,10 @@ def build_frpc_cleanup_command(port, system='linux'):
 def build_frps_cleanup_command(system='linux'):
     normalized_system = validate_system(system)
     if normalized_system == 'windows':
+        windows_root = f'frp/{WINDOWS_FOLDER_NAME}'
         return (
             'powershell -NoProfile -ExecutionPolicy Bypass -Command '
-            f'"$root=Join-Path (Resolve-Path .) {shell_single_quote(f"frp\\{WINDOWS_FOLDER_NAME}")}; '
+            f'"$root=Join-Path (Resolve-Path .) {shell_single_quote(windows_root)}; '
             'Stop-Process -Name frps -Force -ErrorAction SilentlyContinue; '
             'if (Test-Path $root) { Remove-Item -Path (Join-Path $root \"frps.ini\") -Force -ErrorAction SilentlyContinue }; '
             'Write-Host \"服务端残留已清理\""'

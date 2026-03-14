@@ -38,6 +38,8 @@ frp_manager/
 curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.sh -o /tmp/frp-manager-control.sh && sudo bash /tmp/frp-manager-control.sh
 ```
 
+以上命令会直接进入 `control.sh` 数字菜单界面。
+
 说明：
 - `control.sh` 默认采用数字菜单模式（交互式）。
 - 上面的命令会直接进入数字菜单界面。
