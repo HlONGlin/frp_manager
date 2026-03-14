@@ -54,6 +54,11 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 12. 恢复配置（从备份包恢复）
 13. 查看最新备份详情（时间、大小、包含文件）
 
+更新策略说明：
+- 每次在控制器执行“1) 安装或更新”时，会同步 GitHub 最新仓库内容。
+- 默认会用 GitHub 最新 `frp_manager/config.json` 覆盖本地数据库。
+- 如需保留本地数据库，可在运行前设置环境变量：`KEEP_LOCAL_DB_ON_UPDATE=1`。
+
 ## FRPS 一键部署（链接模式）
 
 在面板中新增 FRPS 服务器后，会返回：

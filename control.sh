@@ -30,6 +30,7 @@ REPO_URL="${REPO_URL:-https://github.com/HlONGlin/frp_manager.git}"
 BRANCH="${BRANCH:-main}"
 BOOTSTRAP_DIR="${BOOTSTRAP_DIR:-/opt/frp-manager}"
 BOOTSTRAP_FORCE_UPDATE="${BOOTSTRAP_FORCE_UPDATE:-0}"
+KEEP_LOCAL_DB_ON_UPDATE="${KEEP_LOCAL_DB_ON_UPDATE:-0}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -110,7 +111,7 @@ sync_repo_to_origin() {
     fi
   fi
 
-  if [[ "$BOOTSTRAP_FORCE_UPDATE" == "1" && -f "$repo_dir/frp_manager/config.json" ]]; then
+  if [[ "$BOOTSTRAP_FORCE_UPDATE" == "1" && "$KEEP_LOCAL_DB_ON_UPDATE" == "1" && -f "$repo_dir/frp_manager/config.json" ]]; then
     backup_config_file="$(mktemp 2>/dev/null || true)"
     if [[ -n "$backup_config_file" ]]; then
       cp -f "$repo_dir/frp_manager/config.json" "$backup_config_file"
@@ -176,7 +177,11 @@ sync_repo_to_bootstrap_dir() {
       die "无法检查仓库状态：$BOOTSTRAP_DIR"
     elif [[ "$repo_state" -eq 0 && "$BOOTSTRAP_FORCE_UPDATE" != "1" ]]; then
       BOOTSTRAP_FORCE_UPDATE="1"
-      warn "检测到本地改动，已自动开启强制同步（保留 config.env 与 frp_manager/config.json）。"
+      if [[ "$KEEP_LOCAL_DB_ON_UPDATE" == "1" ]]; then
+        warn "检测到本地改动，已自动开启强制同步（保留 config.env 与 frp_manager/config.json）。"
+      else
+        warn "检测到本地改动，已自动开启强制同步（保留 config.env，并以 GitHub 最新 config.json 覆盖本地数据库）。"
+      fi
     fi
 
     if ! sync_repo_to_origin "$BOOTSTRAP_DIR"; then
@@ -612,6 +617,13 @@ do_install() {
     sync_repo_to_bootstrap_dir
     bash "$BOOTSTRAP_DIR/install.sh"
     exec bash "$BOOTSTRAP_DIR/control.sh"
+  fi
+
+  if [[ -d "$APP_DIR/.git" ]]; then
+    log "检测到本地仓库，正在同步 GitHub 最新代码与数据库..."
+    if ! sync_repo_to_origin "$APP_DIR"; then
+      warn "仓库同步失败，继续使用当前本地文件执行安装。"
+    fi
   fi
 
   bash "$APP_DIR/install.sh"
