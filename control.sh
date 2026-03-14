@@ -31,6 +31,7 @@ BRANCH="${BRANCH:-main}"
 BOOTSTRAP_DIR="${BOOTSTRAP_DIR:-/opt/frp-manager}"
 BOOTSTRAP_FORCE_UPDATE="${BOOTSTRAP_FORCE_UPDATE:-0}"
 KEEP_LOCAL_DB_ON_UPDATE="${KEEP_LOCAL_DB_ON_UPDATE:-0}"
+AGENT_MENU_ENABLED="${AGENT_MENU_ENABLED:-0}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -77,8 +78,8 @@ ensure_git() {
   case "$pm" in
     apt)
       export DEBIAN_FRONTEND=noninteractive
-      apt-get update -y
-      apt-get install -y git
+      apt-get update -y || die "apt-get update 失败，请检查网络或软件源。"
+      apt-get install -y git || die "git 安装失败。"
       ;;
     dnf) dnf -y install git ;;
     yum) yum -y install git ;;
@@ -98,6 +99,13 @@ repo_has_local_changes() {
   [[ -n "$status_output" ]]
 }
 
+create_temp_file() {
+  local tmp_file
+  tmp_file="$(mktemp 2>/dev/null)" || die "创建临时文件失败，请检查磁盘和权限。"
+  [[ -n "$tmp_file" ]] || die "创建临时文件失败，请检查磁盘和权限。"
+  echo "$tmp_file"
+}
+
 sync_repo_to_origin() {
   local repo_dir="$1"
   local backup_env=""
@@ -106,24 +114,18 @@ sync_repo_to_origin() {
   local synced=0
 
   if [[ "$BOOTSTRAP_FORCE_UPDATE" == "1" && -f "$repo_dir/config.env" ]]; then
-    backup_env="$(mktemp 2>/dev/null || true)"
-    if [[ -n "$backup_env" ]]; then
-      cp -f "$repo_dir/config.env" "$backup_env"
-    fi
+    backup_env="$(create_temp_file)"
+    cp -f "$repo_dir/config.env" "$backup_env"
   fi
 
   if [[ "$BOOTSTRAP_FORCE_UPDATE" == "1" && "$KEEP_LOCAL_DB_ON_UPDATE" == "1" && -f "$repo_dir/frp_manager/config.json" ]]; then
-    backup_config_file="$(mktemp 2>/dev/null || true)"
-    if [[ -n "$backup_config_file" ]]; then
-      cp -f "$repo_dir/frp_manager/config.json" "$backup_config_file"
-    fi
+    backup_config_file="$(create_temp_file)"
+    cp -f "$repo_dir/frp_manager/config.json" "$backup_config_file"
   fi
 
   if [[ "$BOOTSTRAP_FORCE_UPDATE" == "1" && -f "$repo_dir/frp_manager/config.json" ]]; then
-    backup_config_for_auth="$(mktemp 2>/dev/null || true)"
-    if [[ -n "$backup_config_for_auth" ]]; then
-      cp -f "$repo_dir/frp_manager/config.json" "$backup_config_for_auth"
-    fi
+    backup_config_for_auth="$(create_temp_file)"
+    cp -f "$repo_dir/frp_manager/config.json" "$backup_config_for_auth"
   fi
 
   if git -C "$repo_dir" fetch origin "$BRANCH" && \
@@ -249,7 +251,7 @@ sync_repo_to_bootstrap_dir() {
     if [[ -e "$BOOTSTRAP_DIR" ]] && [[ -n "$(ls -A "$BOOTSTRAP_DIR" 2>/dev/null || true)" ]]; then
       die "引导目标目录非空：$BOOTSTRAP_DIR"
     fi
-    git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$BOOTSTRAP_DIR"
+    git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$BOOTSTRAP_DIR" || die "仓库克隆失败，请检查网络或仓库地址。"
   fi
 
   chmod +x "$BOOTSTRAP_DIR/control.sh" "$BOOTSTRAP_DIR/install.sh" "$BOOTSTRAP_DIR/uninstall.sh" || true
@@ -306,6 +308,23 @@ service_is_running() {
     openrc) rc-service "$SERVICE_NAME" status >/dev/null 2>&1 ;;
     sysv) service "$SERVICE_NAME" status >/dev/null 2>&1 ;;
     *) return 2 ;;
+  esac
+}
+
+service_exists() {
+  case "$SERVICE_MGR" in
+    systemd)
+      systemctl list-unit-files | grep -qE "^${SERVICE_NAME}\.service[[:space:]]"
+      ;;
+    openrc)
+      [[ -f "$SERVICE_FILE_OPENRC" ]]
+      ;;
+    sysv)
+      [[ -f "$SERVICE_FILE_SYSV" ]]
+      ;;
+    *)
+      return 1
+      ;;
   esac
 }
 
@@ -499,6 +518,7 @@ show_menu() {
   echo "=================================="
   echo " FRP 管理面板控制器"
   echo " 当前状态：$status_text"
+  echo " 当前端口：$(get_port)"
   echo "=================================="
   if [[ "$bootstrap_mode" -eq 1 ]]; then
     echo "1) 部署环境（拉取仓库并安装）"
@@ -506,19 +526,102 @@ show_menu() {
     echo "1) 安装或更新"
   fi
   echo "2) 彻底卸载（删除服务、数据与目录）"
-  echo "3) 重启服务"
-  echo "4) 停止服务"
-  echo "5) 查看服务状态与访问地址"
-  echo "6) 修改面板端口"
-  echo "7) 仅显示访问地址"
-  echo "8) 查看最近日志"
-  echo "9) 重置管理员账号（重新初始化）"
-  echo "10) Agent 编排控制"
-  echo "11) 备份配置"
-  echo "12) 恢复配置"
-  echo "13) 查看最新备份详情"
+  echo "3) 启动服务"
+  echo "4) 重启服务"
+  echo "5) 停止服务"
+  echo "6) 查看服务状态与访问地址"
+  echo "7) 修改面板端口"
+  echo "8) 仅显示访问地址"
+  echo "9) 查看最近日志"
+  echo "10) 重置管理员账号（重新初始化）"
+  echo "11) 运行健康检查"
+  echo "12) 备份配置"
+  echo "13) 恢复配置"
+  echo "14) 查看最新备份详情"
+  if [[ "$AGENT_MENU_ENABLED" == "1" ]]; then
+    echo "15) Agent 编排控制（高级）"
+  fi
   echo "0) 退出"
   echo "----------------------------------"
+}
+
+validate_backup_archive_entries() {
+  local archive_file="$1"
+  local py
+  py="$(pick_python_bin)"
+  "$py" - "$archive_file" <<'PY'
+import sys
+import tarfile
+
+archive = sys.argv[1]
+with tarfile.open(archive, 'r:gz') as tar:
+    for member in tar.getmembers():
+        name = str(member.name or '')
+        if not name or name.startswith('/'):
+            print(f'unsafe entry: {name}')
+            raise SystemExit(2)
+        normalized = name.replace('\\', '/')
+        parts = [part for part in normalized.split('/') if part]
+        if any(part == '..' for part in parts):
+            print(f'unsafe entry: {name}')
+            raise SystemExit(2)
+raise SystemExit(0)
+PY
+}
+
+run_health_check() {
+  if ! require_deployed_env; then
+    return
+  fi
+
+  local py port
+  py="$(pick_python_bin)"
+  port="$(get_port)"
+
+  echo "----------------------------------------"
+  echo "服务管理器：$SERVICE_MGR"
+  echo "项目目录：$APP_DIR"
+  echo "配置文件：$ENV_FILE"
+
+  if service_exists; then
+    echo "服务文件：存在"
+  else
+    warn "服务文件不存在，可能尚未正确安装。"
+  fi
+
+  if service_is_running; then
+    echo "服务状态：运行中"
+  else
+    warn "服务状态：未运行"
+  fi
+
+  if [[ -f "$APP_DIR/app.py" && -f "$APP_DIR/utils/config_manager.py" ]]; then
+    echo "核心文件：完整"
+  else
+    warn "核心文件缺失，请执行安装/更新。"
+  fi
+
+  if "$py" - <<'PY'
+import sys
+try:
+    import flask  # noqa: F401
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+  then
+    echo "Python 依赖：可用"
+  else
+    warn "Python 依赖异常，建议执行安装/更新。"
+  fi
+
+  if is_port_available "$port"; then
+    warn "端口检测：$port 当前未被占用（服务可能未监听）"
+  else
+    echo "端口检测：$port 已占用（符合服务监听预期）"
+  fi
+
+  show_access_urls
 }
 
 backup_config_files() {
@@ -545,6 +648,7 @@ backup_config_files() {
   fi
 
   if ! tar -czf "$archive_file" -C "$tmp_dir" .; then
+    rm -f "$archive_file" || true
     rm -rf "$tmp_dir"
     warn "备份失败。"
     return
@@ -589,6 +693,11 @@ restore_config_files() {
   archive_file="$BACKUP_DIR/$input"
   if [[ ! -f "$archive_file" ]]; then
     warn "备份文件不存在：$archive_file"
+    return
+  fi
+
+  if ! validate_backup_archive_entries "$archive_file"; then
+    warn "备份文件存在不安全路径，已拒绝恢复。"
     return
   fi
 
@@ -648,14 +757,14 @@ prompt_choice() {
   local prompt="$2"
   local input=""
 
-  if [[ -r /dev/tty ]]; then
+  if [[ -t 0 && -r /dev/tty ]]; then
     if ! read -r -p "$prompt" input </dev/tty; then
-      return 1
+      if ! read -r -p "$prompt" input; then
+        return 1
+      fi
     fi
-  else
-    if ! read -r -p "$prompt" input; then
-      return 1
-    fi
+  elif ! read -r -p "$prompt" input; then
+    return 1
   fi
   printf -v "$__var_name" '%s' "$input"
 }
@@ -685,6 +794,11 @@ do_install() {
   fi
 
   bash "$APP_DIR/install.sh"
+  if service_is_running; then
+    log "安装/更新完成，服务运行正常。"
+  else
+    warn "安装/更新完成，但服务未运行，请查看状态与日志。"
+  fi
   show_access_urls
 }
 
@@ -705,26 +819,71 @@ do_uninstall() {
   exit 0
 }
 
+do_start() {
+  require_root
+  if ! service_exists; then
+    warn "未检测到服务文件，请先执行安装/更新。"
+    return
+  fi
+  case "$SERVICE_MGR" in
+    systemd) systemctl start "$SERVICE_NAME" ;;
+    openrc) rc-service "$SERVICE_NAME" start ;;
+    sysv) service "$SERVICE_NAME" start ;;
+    *) die "未找到受支持的服务管理器。" ;;
+  esac
+
+  if service_is_running; then
+    echo "服务已启动。"
+  else
+    warn "启动命令已执行，但服务未处于运行状态，请查看日志。"
+  fi
+  show_access_urls
+}
+
 do_restart() {
   require_root
+  if ! service_exists; then
+    warn "未检测到服务文件，请先执行安装/更新。"
+    return
+  fi
   service_restart
-  echo "服务已重启。"
+  if service_is_running; then
+    echo "服务已重启。"
+  else
+    warn "重启已执行，但服务未处于运行状态，请查看日志。"
+  fi
   show_access_urls
 }
 
 do_stop() {
   require_root
+  if ! service_exists; then
+    warn "未检测到服务文件，请先执行安装/更新。"
+    return
+  fi
   service_stop
-  echo "服务已停止。"
+  if service_is_running; then
+    warn "停止命令已执行，但服务仍在运行。"
+  else
+    echo "服务已停止。"
+  fi
 }
 
 do_status() {
+  if ! service_exists; then
+    warn "未检测到服务文件，请先执行安装/更新。"
+    return
+  fi
   service_status || true
   show_access_urls
 }
 
 do_change_port() {
   require_root
+  if ! service_exists; then
+    warn "未检测到服务文件，请先执行安装/更新。"
+    return
+  fi
 
   local current_port new_port
   current_port="$(get_port)"
@@ -1157,55 +1316,67 @@ main() {
         ;;
       3)
         if require_deployed_env; then
-          do_restart
+          do_start
         fi
         ;;
       4)
         if require_deployed_env; then
-          do_stop
+          do_restart
         fi
         ;;
       5)
         if require_deployed_env; then
-          do_status
+          do_stop
         fi
         ;;
       6)
         if require_deployed_env; then
-          do_change_port
+          do_status
         fi
         ;;
       7)
         if require_deployed_env; then
-          show_access_urls
+          do_change_port
         fi
         ;;
       8)
         if require_deployed_env; then
-          show_logs
+          show_access_urls
         fi
         ;;
       9)
         if require_deployed_env; then
-          reset_admin_credentials
+          show_logs
         fi
         ;;
       10)
-        do_agent_control
+        if require_deployed_env; then
+          reset_admin_credentials
+        fi
         ;;
       11)
+        run_health_check
+        ;;
+      12)
         if require_deployed_env; then
           backup_config_files
         fi
         ;;
-      12)
+      13)
         if require_deployed_env; then
           restore_config_files
         fi
         ;;
-      13)
+      14)
         if require_deployed_env; then
           show_latest_backup_details
+        fi
+        ;;
+      15)
+        if [[ "$AGENT_MENU_ENABLED" == "1" ]]; then
+          do_agent_control
+        else
+          warn "无效选项，请重新输入。"
         fi
         ;;
       0) exit 0 ;;
