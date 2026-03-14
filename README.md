@@ -107,9 +107,13 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 - 生成的 `frpc.ini` 会自动写入中文注解，标注当前安全档位与注意事项。
 - API 也可显式指定：
   - `GET /api/frps/server/<id>/generate_frpc?security_profile=balanced|hybrid|mtls`
-  - `GET /api/frps/server/<id>/port/<port_id>/deploy?system=linux|windows&security_profile=balanced|hybrid|mtls`
+  - `GET /api/frps/server/<id>/port/<port_id>/deploy?system=linux|windows&security_profile=balanced|hybrid|mtls&node_id=<node_id>`
   - `GET /api/frps/server/<id>/port/<port_id>/deploy.sh?deploy_key=...&security_profile=...`（Linux 脚本）
   - `GET /api/frps/server/<id>/port/<port_id>/deploy.ps1?deploy_key=...&security_profile=...`（Windows 脚本）
+
+节点联动说明：
+- 生成客户端部署命令时可附带 `node_id`，面板会自动创建一个可控应用（runtime）。
+- 之后可在“节点与应用”里直接对该客户端执行“启动/停止/删除”。
 
 ## 环境变量
 

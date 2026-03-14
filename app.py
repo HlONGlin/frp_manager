@@ -19,6 +19,7 @@ from utils.config_manager import (
     create_agent_node,
     add_frps_server,
     add_port_mapping,
+    delete_agent_runtime,
     delete_agent_node,
     delete_frpc_config,
     delete_frps_server,
@@ -48,6 +49,7 @@ from utils.config_manager import (
     verify_agent_node_token,
 )
 from utils.deploy_commands import (
+    LINUX_FOLDER_NAME,
     build_frpc_config,
     build_frpc_deploy_command,
     build_frpc_deploy_script,
@@ -730,6 +732,47 @@ def find_port(server, port_id):
     return None
 
 
+def build_linked_runtime_id(server_id, port_id, node_id):
+    return f'frpc:{str(server_id or "").strip()}:{str(port_id or "").strip()}:{str(node_id or "").strip()}'
+
+
+def build_frpc_config_file_name(port):
+    raw = str((port or {}).get('id') or (port or {}).get('name') or 'proxy').strip()
+    normalized = re.sub(r'[^A-Za-z0-9._-]', '_', raw)[:64] or 'proxy'
+    return f'frpc_{normalized}.ini'
+
+
+def build_linked_frpc_runtime_metadata(port):
+    config_name = build_frpc_config_file_name(port)
+    binary_path = f'/opt/frp/{LINUX_FOLDER_NAME}/frpc'
+    config_path = f'/opt/frp/{LINUX_FOLDER_NAME}/{config_name}'
+    process_match = f'frpc -c {config_name}'
+    return {
+        'command_template': 'frpc-auto',
+        'service_name': config_name,
+        'start_command': f'nohup {binary_path} -c {config_path} >/dev/null 2>&1 &',
+        'stop_command': f'pkill -f {shell_single_quote(process_match)} || true',
+        'check_command': f'pgrep -f {shell_single_quote(process_match)}',
+    }
+
+
+def upsert_linked_frpc_runtime(server, port, node_id):
+    runtime_id = build_linked_runtime_id(server.get('id', ''), port.get('id', ''), node_id)
+    server_name = str(server.get('name', '')).strip() or str(server.get('id', '')).strip() or 'server'
+    port_name = str(port.get('name', '')).strip() or str(port.get('id', '')).strip() or 'port'
+    return upsert_agent_runtime(
+        {
+            'id': runtime_id,
+            'node_id': node_id,
+            'kind': 'frpc',
+            'name': f'{server_name}-{port_name}',
+            'status': 'unknown',
+            'enabled': True,
+            'metadata': build_linked_frpc_runtime_metadata(port),
+        }
+    )
+
+
 @app.errorhandler(ValidationError)
 def handle_validation_error(error):
     return error_response(str(error), 422)
@@ -1183,6 +1226,7 @@ def generate_frpc_for_server(server_id):
 def generate_frpc_deploy(server_id, port_id):
     system = validate_system(request.args.get('system', 'linux'))
     security_profile = validate_security_profile(request.args.get('security_profile', 'balanced'))
+    node_id = str(request.args.get('node_id', '')).strip()
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
@@ -1206,6 +1250,15 @@ def generate_frpc_deploy(server_id, port_id):
     command = build_frpc_one_click_command(deploy_urls, system=system)
     if not command:
         command = build_frpc_deploy_command(server, port, system=system, security_profile=profile_summary['id'])
+
+    linked_runtime = None
+    if node_id:
+        if not get_agent_node(node_id):
+            return error_response('目标节点不存在', 404)
+        if system != 'linux':
+            return error_response('当前仅支持 Linux 节点联动控制', 422)
+        linked_runtime = upsert_linked_frpc_runtime(server, port, node_id)
+
     return success_response(
         {
             'command': command,
@@ -1213,6 +1266,7 @@ def generate_frpc_deploy(server_id, port_id):
             'deploy_url': deploy_urls[0] if deploy_urls else '',
             'deploy_urls': deploy_urls,
             'manager_urls': manager_urls,
+            'linked_runtime': linked_runtime,
         }
     )
 
@@ -1685,6 +1739,14 @@ def ensure_runtime_stopped(runtime_id):
     if error:
         return error
     return success_response({'job': created}, status_code=201)
+
+
+@app.route('/api/agent/runtime/<runtime_id>', methods=['DELETE'])
+def delete_agent_runtime_route(runtime_id):
+    deleted = delete_agent_runtime(runtime_id)
+    if not deleted:
+        return error_response('运行实例不存在', 404)
+    return success_response()
 
 
 @app.route('/api/agent/v1/register', methods=['POST'])

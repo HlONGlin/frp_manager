@@ -367,6 +367,7 @@ bind_port = $ACTUAL_SERVER_PORT
 vhost_http_port = $ACTUAL_HTTP_PORT
 vhost_https_port = $ACTUAL_HTTPS_PORT
 dashboard_port = $ACTUAL_DASHBOARD_PORT
+dashboard_addr = 0.0.0.0
 dashboard_user = {_value(server.get('dashboard_user'))}
 dashboard_pwd = {_value(server.get('dashboard_pwd'))}
 token = $FRPS_TOKEN
@@ -409,6 +410,7 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
     config = build_frpc_config(server, [port], security_profile=profile_summary['id'])
     config_b64 = base64.b64encode(config.encode('utf-8')).decode('ascii')
     protocol = _value(port.get('protocol')).lower()
+    config_name = f"frpc_{_safe_proxy_name(port.get('id') or port.get('name') or 'proxy')}.ini"
 
     if system == 'windows':
         if protocol in {'http', 'https'}:
@@ -425,8 +427,8 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
             f"Invoke-WebRequest -Uri '{BASE_DOWNLOAD_URL}/{WINDOWS_PACKAGE_NAME}' -OutFile 'frpc.zip'; "
             "Expand-Archive -Path 'frpc.zip' -DestinationPath '.' -Force; "
             f"Set-Location '{WINDOWS_FOLDER_NAME}'; "
-            f"[System.IO.File]::WriteAllText('frpc.ini',[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{config_b64}'))); "
-            "Start-Process -WindowStyle Hidden -FilePath '.\\frpc.exe' -ArgumentList '-c frpc.ini'; "
+            f"[System.IO.File]::WriteAllText('{config_name}',[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{config_b64}'))); "
+            f"Start-Process -WindowStyle Hidden -FilePath '.\\frpc.exe' -ArgumentList '-c {config_name}'; "
             f"Write-Host 'FRPC 部署完成！ 安全档位: {profile_summary['label']}'; "
             f"{target_line}"
         )
@@ -445,8 +447,8 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
         f"wget -O frpc.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME} && "
         "tar -xzf frpc.tar.gz && "
         f"cd {LINUX_FOLDER_NAME} && "
-        f"printf %s {_shell_single_quote(config_b64)} | base64 -d > frpc.ini && "
-        "nohup ./frpc -c frpc.ini >/dev/null 2>&1 & "
+        f"printf %s {_shell_single_quote(config_b64)} | base64 -d > {config_name} && "
+        f"nohup ./frpc -c {config_name} >/dev/null 2>&1 & "
         f"&& echo \"FRPC 部署完成！ 安全档位: {profile_summary['label']}\" && {target_line}"
     )
 

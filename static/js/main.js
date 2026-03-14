@@ -662,6 +662,10 @@ function initAgentActionDelegation() {
                 }
                 if (action === 'stop') {
                     await ensureRuntime(runtimeId, 'stopped');
+                    return;
+                }
+                if (action === 'delete') {
+                    await deleteAgentRuntime(runtimeId);
                 }
             } catch (error) {
                 showToast(error.message || '应用操作失败', 'error');
@@ -738,6 +742,7 @@ async function loadAgentData(refresh = false) {
         renderAgentRuntimes(state.agentRuntimes);
         renderAgentJobs(state.agentJobs);
         hydrateAgentNodeSelect();
+        populateDeployNodeSelect();
         if (refresh) {
             showToast('节点数据已刷新', 'success');
         }
@@ -813,6 +818,7 @@ function renderAgentRuntimes(runtimes) {
                 <div class="port-actions">
                     <button class="btn btn-xs btn-success" data-runtime-action="start" data-runtime-id="${safeAttr(runtimeId)}">启动</button>
                     <button class="btn btn-xs btn-warning" data-runtime-action="stop" data-runtime-id="${safeAttr(runtimeId)}">停止</button>
+                    <button class="btn btn-xs btn-danger" data-runtime-action="delete" data-runtime-id="${safeAttr(runtimeId)}">删除</button>
                 </div>
             </div>
         `;
@@ -999,6 +1005,16 @@ async function deleteAgentNode(nodeId) {
     }
     await apiRequest(`/api/agent/node/${encodeURIComponent(nodeId)}`, { method: 'DELETE' });
     showToast('节点已删除', 'success');
+    await loadAgentData(false);
+}
+
+async function deleteAgentRuntime(runtimeId) {
+    if (!window.confirm('确认删除该应用？删除后将无法在面板中直接开关。')) {
+        return;
+    }
+    await apiRequest(`/api/agent/runtime/${encodeURIComponent(runtimeId)}`, { method: 'DELETE' });
+    state.selectedRuntimeIds.delete(String(runtimeId || ''));
+    showToast('应用已删除', 'success');
     await loadAgentData(false);
 }
 
@@ -1432,7 +1448,37 @@ function showDeployModal(server, command, managerUrls = [], deployUrl = '', depl
 function showSystemSelect(serverId, portId) {
     state.selectedDeploy.serverId = serverId;
     state.selectedDeploy.portId = portId;
+    populateDeployNodeSelect();
     openModal('system-select-modal');
+}
+
+function populateDeployNodeSelect() {
+    const select = document.getElementById('deploy-link-node-select');
+    if (!select) {
+        return;
+    }
+    const current = String(select.value || '').trim();
+    const options = ['<option value="">不绑定节点（仅生成部署命令）</option>'];
+    state.agentNodes.forEach((node) => {
+        const nodeId = String(node?.id || '').trim();
+        if (!nodeId) {
+            return;
+        }
+        const nodeName = String(node?.name || nodeId).trim();
+        options.push(`<option value="${safeAttr(nodeId)}">${safeHtml(nodeName)} (${safeHtml(nodeId)})</option>`);
+    });
+    select.innerHTML = options.join('');
+    if (current && state.agentNodes.some((node) => String(node?.id || '').trim() === current)) {
+        select.value = current;
+    }
+}
+
+function getDeployLinkedNodeId() {
+    const select = document.getElementById('deploy-link-node-select');
+    if (!select) {
+        return '';
+    }
+    return String(select.value || '').trim();
 }
 
 function triggerFastStatusSync() {
@@ -1450,15 +1496,27 @@ async function selectSystem(system) {
     }
     try {
         const securityProfile = getSecurityProfile();
+        const linkedNodeId = getDeployLinkedNodeId();
         saveSecurityProfile(securityProfile);
+        const query = new URLSearchParams({
+            system: String(system || 'linux'),
+            security_profile: String(securityProfile || 'balanced'),
+        });
+        if (linkedNodeId) {
+            query.set('node_id', linkedNodeId);
+        }
         const data = await apiRequest(
-            `/api/frps/server/${serverId}/port/${portId}/deploy?system=${encodeURIComponent(system)}&security_profile=${encodeURIComponent(securityProfile)}`
+            `/api/frps/server/${serverId}/port/${portId}/deploy?${query.toString()}`
         );
         const code = document.querySelector('#frpc-config-output code');
         if (code) {
             code.textContent = data.command || '';
         }
         updateSecurityProfileHint(data.security_profile?.id || securityProfile);
+        if (data.linked_runtime?.id) {
+            showToast('已绑定节点并创建可控客户端应用，可在“节点与应用”中开关/删除', 'success');
+            await loadAgentData(false);
+        }
         openModal('frpc-modal');
     } catch (error) {
         showToast(error.message || '生成客户端命令失败', 'error');

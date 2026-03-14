@@ -938,3 +938,23 @@ def upsert_agent_runtime(runtime):
         config['agent'] = agent
         _atomic_write(CONFIG_FILE, config)
         return copy.deepcopy(saved)
+
+
+def delete_agent_runtime(runtime_id):
+    normalized_id = str(runtime_id or '').strip()
+    if not normalized_id:
+        return False
+
+    with LOCK:
+        config = load_config()
+        agent = _ensure_agent_section(config)
+        runtimes = agent.get('runtimes', [])
+        new_runtimes = [runtime for runtime in runtimes if str(runtime.get('id', '')).strip() != normalized_id]
+        deleted = len(new_runtimes) != len(runtimes)
+        if not deleted:
+            return False
+
+        agent['runtimes'] = new_runtimes
+        config['agent'] = agent
+        _atomic_write(CONFIG_FILE, config)
+        return True
