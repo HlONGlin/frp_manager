@@ -20,10 +20,6 @@
                         <span class="tab-icon">🖥️</span>
                         服务端
                     </button>
-                    <button type="button" class="nav-tab" data-tab="agent">
-                        <span class="tab-icon">🤖</span>
-                        节点控制
-                    </button>
                     <button type="button" class="nav-tab" data-tab="terminal">
                         <span class="tab-icon">⌨️</span>
                         控制台
@@ -56,76 +52,6 @@
                 </div>
             </section>
 
-            <section id="agent-panel" class="tab-panel">
-                <div class="panel-header">
-                    <h2>节点与应用</h2>
-                    <div class="server-actions">
-                        <button type="button" class="btn btn-primary" id="add-agent-node">
-                            <span class="btn-icon">➕</span> 添加节点
-                        </button>
-                        <button type="button" class="btn btn-secondary" id="add-agent-runtime">
-                            <span class="btn-icon">🧩</span> 添加应用
-                        </button>
-                        <button type="button" class="btn btn-outline" id="refresh-agent-data">刷新</button>
-                    </div>
-                </div>
-
-                <div class="panel-grid">
-                    <div class="card">
-                        <h3>节点列表</h3>
-                        <p class="hint">创建节点后可一键生成接入命令，在目标服务器运行后会自动上线。</p>
-                        <div class="ports-list" id="agent-nodes-list">
-                            <p class="no-ports">暂无节点</p>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h3>应用列表</h3>
-                        <p class="hint">支持单个启动/停止，也可勾选多个批量执行。</p>
-                        <div class="server-actions" style="margin-bottom: 12px;">
-                            <button type="button" class="btn btn-sm btn-primary" id="batch-start-runtimes">批量启动</button>
-                            <button type="button" class="btn btn-sm btn-danger" id="batch-stop-runtimes">批量停止</button>
-                        </div>
-                        <div class="ports-list" id="agent-runtimes-list">
-                            <p class="no-ports">暂无应用</p>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <h3>任务审计</h3>
-                        <p class="hint">可按任务状态、下发人、来源 IP 筛选，快速定位操作来源。</p>
-                        <div class="form-row" style="margin-bottom: 10px;">
-                            <div class="form-group">
-                                <label>状态</label>
-                                <select id="agent-job-status-filter">
-                                    <option value="">全部</option>
-                                    <option value="queued">queued</option>
-                                    <option value="leased">leased</option>
-                                    <option value="running">running</option>
-                                    <option value="succeeded">succeeded</option>
-                                    <option value="failed">failed</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>下发人</label>
-                                <input type="text" id="agent-job-user-filter" placeholder="例如：admin">
-                            </div>
-                            <div class="form-group">
-                                <label>来源 IP</label>
-                                <input type="text" id="agent-job-ip-filter" placeholder="例如：10.0.0.12">
-                            </div>
-                        </div>
-                        <div class="server-actions" style="margin-bottom: 12px;">
-                            <button type="button" class="btn btn-sm btn-primary" id="apply-agent-job-filter">应用筛选</button>
-                            <button type="button" class="btn btn-sm btn-secondary" id="clear-agent-job-filter">清空筛选</button>
-                        </div>
-                        <div class="ports-list" id="agent-jobs-list">
-                            <p class="no-ports">暂无任务</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
             <section id="terminal-panel" class="tab-panel">
                 <div class="panel-header">
                     <h2>控制台</h2>
@@ -144,8 +70,8 @@
                     <div class="guide-card">
                         <h4>新手 3 步</h4>
                         <p>1) 先到“服务端”添加并安装服务端。</p>
-                        <p>2) 再到“节点与应用”添加节点并执行接入命令。</p>
-                        <p>3) 添加应用后可直接点“启动/停止”或批量执行。</p>
+                        <p>2) 在端口映射里选择规则并生成客户端命令。</p>
+                        <p>3) 在目标机器执行命令后验证连通性。</p>
                     </div>
                     <div class="guide-card">
                         <h4>使用提示</h4>
@@ -321,13 +247,6 @@
                         </select>
                         <p class="hint">严格模式需要提前准备证书文件路径（配置里有注释示例）。</p>
                     </div>
-                    <div class="form-group" style="max-width: 520px; margin: 0 auto 16px; text-align: left;">
-                        <label for="deploy-link-node-select">联动节点（可选）</label>
-                        <select id="deploy-link-node-select">
-                            <option value="">不绑定节点（仅生成部署命令）</option>
-                        </select>
-                        <p class="hint">选择节点后，会自动创建可控客户端应用，可在“节点与应用”里直接启动/停止/删除。</p>
-                    </div>
                     <div class="system-buttons">
                         <button type="button" class="system-btn" data-system="linux">
                             <span class="system-icon">🐧</span>
@@ -363,119 +282,6 @@
                 </div>
                 <button type="button" class="btn btn-primary copy-btn" id="copy-deploy-command">
                     <span class="btn-icon">📋</span> 复制命令
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal" id="agent-node-modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>添加节点</h3>
-                <button type="button" class="modal-close" id="close-agent-node-modal">&times;</button>
-            </div>
-            <form id="agent-node-form">
-                <div class="form-group">
-                    <label>节点名称</label>
-                    <input type="text" name="name" placeholder="例如：香港-01" required>
-                </div>
-                <div class="form-group">
-                    <label>标签（逗号分隔）</label>
-                    <input type="text" name="labels" placeholder="prod, hk, edge">
-                </div>
-                <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" id="cancel-agent-node-modal">取消</button>
-                    <button type="submit" class="btn btn-primary">创建节点</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <div class="modal" id="agent-runtime-modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>添加应用</h3>
-                <button type="button" class="modal-close" id="close-agent-runtime-modal">&times;</button>
-            </div>
-            <form id="agent-runtime-form">
-                <div class="form-group">
-                    <label>所属节点</label>
-                    <select id="agent-runtime-node" name="node_id" required></select>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>应用 ID（可空自动生成）</label>
-                        <input type="text" name="id" placeholder="frpc:nodeA:web01">
-                    </div>
-                    <div class="form-group">
-                        <label>应用名称</label>
-                        <input type="text" name="name" placeholder="web01" required>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>应用类型</label>
-                        <select name="kind">
-                            <option value="frpc">客户端</option>
-                            <option value="frps">服务端</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>初始状态</label>
-                        <select name="status">
-                            <option value="unknown">unknown</option>
-                            <option value="running">running</option>
-                            <option value="stopped">stopped</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>命令模板（推荐）</label>
-                        <select name="command_template">
-                            <option value="">手动命令</option>
-                            <option value="systemd">systemd 服务</option>
-                            <option value="service">service 服务</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>服务名（模板模式必填）</label>
-                        <input type="text" name="service_name" placeholder="例如：frpc-web01">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>启动命令</label>
-                    <input type="text" name="start_command" placeholder="systemctl start frpc-web01">
-                </div>
-                <div class="form-group">
-                    <label>停止命令</label>
-                    <input type="text" name="stop_command" placeholder="systemctl stop frpc-web01">
-                </div>
-                <div class="form-group">
-                    <label>检查命令</label>
-                    <input type="text" name="check_command" placeholder="systemctl is-active --quiet frpc-web01">
-                </div>
-                <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" id="cancel-agent-runtime-modal">取消</button>
-                    <button type="submit" class="btn btn-primary">保存应用</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <div class="modal" id="agent-bootstrap-modal">
-        <div class="modal-content modal-large">
-            <div class="modal-header">
-                <h3>节点接入命令</h3>
-                <button type="button" class="modal-close" id="close-agent-bootstrap-modal">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p class="hint">在目标服务器执行以下命令，节点会自动接入并开始接收任务。</p>
-                <div class="code-block">
-                    <pre id="agent-bootstrap-output"><code></code></pre>
-                </div>
-                <button type="button" class="btn btn-primary copy-btn" id="copy-agent-bootstrap">
-                    <span class="btn-icon">📋</span> 复制接入命令
                 </button>
             </div>
         </div>

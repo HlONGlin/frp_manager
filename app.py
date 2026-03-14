@@ -8,6 +8,8 @@ import socket
 import sys
 import threading
 import time
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from urllib.parse import quote, quote_plus, urlparse
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -50,6 +52,7 @@ from utils.config_manager import (
 )
 from utils.deploy_commands import (
     LINUX_FOLDER_NAME,
+    WINDOWS_FOLDER_NAME,
     build_frpc_config,
     build_frpc_deploy_command,
     build_frpc_deploy_script,
@@ -732,6 +735,42 @@ def find_port(server, port_id):
     return None
 
 
+def check_tcp_connectivity(host, port, timeout=3.0):
+    host_text = str(host or '').strip()
+    if not host_text:
+        return False, '服务端地址为空'
+    try:
+        port_int = int(port)
+    except (TypeError, ValueError):
+        return False, '端口无效'
+
+    try:
+        with socket.create_connection((host_text, port_int), timeout=timeout):
+            return True, f'{host_text}:{port_int} 可连接'
+    except Exception as error:
+        return False, f'{host_text}:{port_int} 连接失败：{error}'
+
+
+def check_http_connectivity(url, timeout=4.0):
+    target = str(url or '').strip()
+    if not target:
+        return False, 'URL 为空'
+    req = urllib_request.Request(target, method='GET')
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            status = int(getattr(resp, 'status', 0) or 0)
+            if 200 <= status < 500:
+                return True, f'{target} 响应状态 {status}'
+            return False, f'{target} 响应状态 {status}'
+    except urllib_error.HTTPError as error:
+        status = int(getattr(error, 'code', 0) or 0)
+        if 200 <= status < 500:
+            return True, f'{target} 响应状态 {status}'
+        return False, f'{target} 响应状态 {status}'
+    except Exception as error:
+        return False, f'{target} 检测失败：{error}'
+
+
 def build_linked_runtime_id(server_id, port_id, node_id):
     return f'frpc:{str(server_id or "").strip()}:{str(port_id or "").strip()}:{str(node_id or "").strip()}'
 
@@ -754,6 +793,47 @@ def build_linked_frpc_runtime_metadata(port):
         'stop_command': f'pkill -f {shell_single_quote(process_match)} || true',
         'check_command': f'pgrep -f {shell_single_quote(process_match)}',
     }
+
+
+def build_frpc_cleanup_command(port, system='linux'):
+    normalized_system = validate_system(system)
+    config_name = build_frpc_config_file_name(port)
+    if normalized_system == 'windows':
+        return (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            f'"$cfg={shell_single_quote(config_name)}; '
+            f'$root=Join-Path (Resolve-Path .) {shell_single_quote(f"frp\\{WINDOWS_FOLDER_NAME}")}; '
+            '$procs=Get-CimInstance Win32_Process -Filter \"Name=\'frpc.exe\'\"; '
+            '$targets=$procs | Where-Object { $_.CommandLine -like (\"*\" + $cfg + \"*\") }; '
+            'foreach($p in $targets){ Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }; '
+            'if (Test-Path $root) { Remove-Item -Path (Join-Path $root $cfg) -Force -ErrorAction SilentlyContinue }; '
+            'Write-Host \"客户端残留已清理（按配置文件）\""'
+        )
+
+    process_match = f'frpc -c {config_name}'
+    return (
+        f"pkill -f {shell_single_quote(process_match)} || true; "
+        f"rm -f /opt/frp/{LINUX_FOLDER_NAME}/{config_name}; "
+        'echo "客户端残留已清理（按配置文件）"'
+    )
+
+
+def build_frps_cleanup_command(system='linux'):
+    normalized_system = validate_system(system)
+    if normalized_system == 'windows':
+        return (
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+            f'"$root=Join-Path (Resolve-Path .) {shell_single_quote(f"frp\\{WINDOWS_FOLDER_NAME}")}; '
+            'Stop-Process -Name frps -Force -ErrorAction SilentlyContinue; '
+            'if (Test-Path $root) { Remove-Item -Path (Join-Path $root \"frps.ini\") -Force -ErrorAction SilentlyContinue }; '
+            'Write-Host \"服务端残留已清理\""'
+        )
+
+    return (
+        'pkill -x frps || true; '
+        f'rm -f /opt/frp/{LINUX_FOLDER_NAME}/frps.ini; '
+        'echo "服务端残留已清理"'
+    )
 
 
 def upsert_linked_frpc_runtime(server, port, node_id):
@@ -1068,6 +1148,16 @@ def get_frps_deploy_script(server_id):
     return response
 
 
+@app.route('/api/frps/server/<server_id>/cleanup', methods=['GET'])
+def get_frps_cleanup_command(server_id):
+    system = validate_system(request.args.get('system', 'linux'))
+    server = get_frps_server(server_id)
+    if not server:
+        return error_response('服务器不存在', 404)
+    command = build_frps_cleanup_command(system=system)
+    return success_response({'command': command, 'system': system})
+
+
 @app.route('/api/frps/server/<server_id>', methods=['PUT'])
 def update_frps(server_id):
     updates = validate_server_update(parse_json_body())
@@ -1207,6 +1297,65 @@ def toggle_port(server_id, port_id):
     return success_response()
 
 
+@app.route('/api/frps/server/<server_id>/port/<port_id>/check', methods=['POST'])
+def check_port_mapping(server_id, port_id):
+    server = get_frps_server(server_id)
+    if not server:
+        return error_response('服务器不存在', 404)
+
+    port = find_port(server, port_id)
+    if not port:
+        return error_response('端口映射不存在', 404)
+
+    def finish_check(ok, message, protocol, target=''):
+        checked_at = datetime.now(timezone.utc).isoformat()
+        update_port_mapping(
+            server_id,
+            port_id,
+            {
+                'last_check_ok': bool(ok),
+                'last_check_message': str(message or '').strip(),
+                'last_check_protocol': str(protocol or '').strip(),
+                'last_check_target': str(target or '').strip(),
+                'last_check_at': checked_at,
+            },
+        )
+        return success_response(
+            {
+                'ok': bool(ok),
+                'message': str(message or '').strip(),
+                'protocol': str(protocol or '').strip(),
+                'target': str(target or '').strip(),
+                'checked_at': checked_at,
+            }
+        )
+
+    if port.get('enabled') is False:
+        return finish_check(False, '该规则已禁用，请先启用后再检测', str(port.get('protocol', 'tcp')).strip().lower())
+
+    server_addr = str(server.get('server_addr', '')).strip()
+    if not server_addr:
+        return finish_check(False, '服务端地址未识别，请先部署服务端', str(port.get('protocol', 'tcp')).strip().lower())
+
+    protocol = str(port.get('protocol', 'tcp')).strip().lower()
+    if protocol == 'tcp':
+        ok, message = check_tcp_connectivity(server_addr, port.get('remote_port'), timeout=3.0)
+        return finish_check(ok, message, protocol)
+
+    if protocol == 'udp':
+        return finish_check(False, 'UDP 无法在面板内准确探测连通性，请使用业务侧实际流量验证', protocol)
+
+    if protocol in {'http', 'https'}:
+        domain = str(port.get('domain', '')).strip()
+        if not domain:
+            return finish_check(False, '未配置域名，无法进行 HTTP/HTTPS 探测', protocol)
+        target = f'{protocol}://{domain}'
+        ok, message = check_http_connectivity(target, timeout=4.0)
+        return finish_check(ok, message, protocol, target=target)
+
+    return finish_check(False, f'暂不支持协议 {protocol} 的自动检测', protocol)
+
+
 @app.route('/api/frps/server/<server_id>/generate_frpc', methods=['GET'])
 def generate_frpc_for_server(server_id):
     security_profile = validate_security_profile(request.args.get('security_profile', 'balanced'))
@@ -1279,6 +1428,21 @@ def get_frpc_deploy_script_linux(server_id, port_id):
 @app.route('/api/frps/server/<server_id>/port/<port_id>/deploy.ps1', methods=['GET'])
 def get_frpc_deploy_script_windows(server_id, port_id):
     return _get_frpc_deploy_script(server_id, port_id, system='windows')
+
+
+@app.route('/api/frps/server/<server_id>/port/<port_id>/cleanup', methods=['GET'])
+def get_frpc_cleanup_command(server_id, port_id):
+    system = validate_system(request.args.get('system', 'linux'))
+    server = get_frps_server(server_id)
+    if not server:
+        return error_response('服务器不存在', 404)
+
+    port = find_port(server, port_id)
+    if not port:
+        return error_response('端口映射不存在', 404)
+
+    command = build_frpc_cleanup_command(port, system=system)
+    return success_response({'command': command, 'system': system})
 
 
 def _get_frpc_deploy_script(server_id, port_id, system='linux'):

@@ -7,6 +7,7 @@ const state = {
     selectedDeploy: {
         serverId: '',
         portId: '',
+        action: 'deploy-frpc',
     },
     selectedRuntimeIds: new Set(),
     consoleActions: [],
@@ -38,21 +39,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     initModals();
     initForms();
     initServerActionDelegation();
-    initAgentActionDelegation();
     initTerminal();
     updateSecurityProfileHint(getSecurityProfile());
 
     await loadAuthMeta();
     await loadLocalIp();
     await loadServers(false);
-    await loadAgentData(false);
     setTimeout(() => {
         loadServers(true);
-        loadAgentData(true);
     }, 200);
     state.pollTimer = setInterval(() => {
         loadServers(true);
-        loadAgentData(true);
     }, 10000);
 });
 
@@ -99,9 +96,6 @@ function initModals() {
     bindModalClose('frpc-modal', ['close-frpc-modal']);
     bindModalClose('system-select-modal', ['close-system-modal']);
     bindModalClose('deploy-modal', ['close-deploy-modal']);
-    bindModalClose('agent-node-modal', ['close-agent-node-modal', 'cancel-agent-node-modal']);
-    bindModalClose('agent-runtime-modal', ['close-agent-runtime-modal', 'cancel-agent-runtime-modal']);
-    bindModalClose('agent-bootstrap-modal', ['close-agent-bootstrap-modal']);
     bindModalClose('console-actions-modal', ['close-console-actions-modal']);
 }
 
@@ -307,7 +301,19 @@ function initServerActionDelegation() {
                 return;
             }
             if (action === 'deploy-frpc') {
-                showSystemSelect(serverId, portId);
+                showSystemSelect(serverId, portId, 'deploy-frpc');
+                return;
+            }
+            if (action === 'check-port') {
+                await checkPort(serverId, portId);
+                return;
+            }
+            if (action === 'cleanup-frpc') {
+                showSystemSelect(serverId, portId, 'cleanup-frpc');
+                return;
+            }
+            if (action === 'cleanup-frps') {
+                await showFRPSCleanupCommand(serverId);
             }
         } catch (error) {
             showToast(error.message || '操作失败', 'error');
@@ -742,7 +748,6 @@ async function loadAgentData(refresh = false) {
         renderAgentRuntimes(state.agentRuntimes);
         renderAgentJobs(state.agentJobs);
         hydrateAgentNodeSelect();
-        populateDeployNodeSelect();
         if (refresh) {
             showToast('节点数据已刷新', 'success');
         }
@@ -1125,6 +1130,7 @@ function renderServerCard(server) {
             <div class="server-actions">
                 <button class="btn btn-sm btn-primary" data-action="generate-frpc" data-server-id="${serverId}">查看客户端配置</button>
                 <button class="btn btn-sm btn-secondary" data-action="deploy-frps" data-server-id="${serverId}">安装服务端</button>
+                <button class="btn btn-sm btn-outline" data-action="cleanup-frps" data-server-id="${serverId}">清理服务端残留</button>
                 <button class="btn btn-sm btn-outline" data-action="refresh-server" data-server-id="${serverId}">刷新状态</button>
                 <button class="btn btn-sm btn-outline" data-action="edit-server" data-server-id="${serverId}">编辑</button>
                 <button class="btn btn-sm btn-danger" data-action="delete-server" data-server-id="${serverId}">删除</button>
@@ -1142,6 +1148,7 @@ function renderPorts(serverId, ports) {
         const portId = safeAttr(port.id);
         const enabled = port.enabled !== false;
         const protocol = String(port.protocol || '').toLowerCase();
+        const checkStatus = formatPortCheckStatus(port);
         const mapping = PORT_PROTOCOLS_WITH_DOMAIN.has(protocol)
             ? `${safeHtml(port.local_ip)}:${safeHtml(port.local_port)} → ${safeHtml(port.domain || '(未配置域名)')}`
             : `${safeHtml(port.local_ip)}:${safeHtml(port.local_port)} → :${safeHtml(port.remote_port)}`;
@@ -1152,18 +1159,46 @@ function renderPorts(serverId, ports) {
                     <span class="port-name">${safeHtml(port.name || '转发规则')}</span>
                     <span class="port-mapping">${mapping}</span>
                     <span class="port-protocol">${safeHtml((port.protocol || 'tcp').toUpperCase())}</span>
+                    <span class="port-mapping">${checkStatus}</span>
                 </div>
                 <div class="port-actions">
                     <button class="btn btn-xs ${enabled ? 'btn-warning' : 'btn-success'}" data-action="toggle-port" data-server-id="${serverId}" data-port-id="${portId}">
                         ${enabled ? '禁用' : '启用'}
                     </button>
+                    <button class="btn btn-xs btn-secondary" data-action="check-port" data-server-id="${serverId}" data-port-id="${portId}">检测</button>
                     <button class="btn btn-xs btn-outline" data-action="edit-port" data-server-id="${serverId}" data-port-id="${portId}">编辑</button>
                     <button class="btn btn-xs btn-outline" data-action="deploy-frpc" data-server-id="${serverId}" data-port-id="${portId}">客户端命令</button>
+                    <button class="btn btn-xs btn-outline" data-action="cleanup-frpc" data-server-id="${serverId}" data-port-id="${portId}">清理客户端残留</button>
                     <button class="btn btn-xs btn-danger" data-action="delete-port" data-server-id="${serverId}" data-port-id="${portId}">删除</button>
                 </div>
             </div>
         `;
     }).join('');
+}
+
+function formatPortCheckStatus(port) {
+    const checkedAt = String(port?.last_check_at || '').trim();
+    if (!checkedAt) {
+        return '检测状态：未检测';
+    }
+
+    let timeText = checkedAt;
+    try {
+        const date = new Date(checkedAt);
+        if (!Number.isNaN(date.getTime())) {
+            timeText = date.toLocaleString('zh-CN', { hour12: false });
+        }
+    } catch (_error) {
+        timeText = checkedAt;
+    }
+
+    const ok = Boolean(port?.last_check_ok);
+    const msg = String(port?.last_check_message || '').trim();
+    const prefix = ok ? '检测状态：可用' : '检测状态：异常';
+    if (!msg) {
+        return `${prefix}（${timeText}）`;
+    }
+    return `${prefix}（${timeText}） ${safeHtml(msg)}`;
 }
 
 function openFRPSModal(server = null) {
@@ -1361,6 +1396,15 @@ async function togglePort(serverId, portId) {
     await loadServers(false);
 }
 
+async function checkPort(serverId, portId) {
+    const data = await apiRequest(`/api/frps/server/${serverId}/port/${portId}/check`, { method: 'POST' });
+    if (data.ok) {
+        showToast(data.message || '检测通过', 'success');
+        return;
+    }
+    showToast(data.message || '检测未通过', 'warning');
+}
+
 async function deletePort(serverId, portId) {
     if (!window.confirm('确定要删除这条转发规则吗？')) {
         return;
@@ -1393,6 +1437,20 @@ async function showFRPSDeployCommand(serverId) {
         showDeployModal(data.server, data.command, data.manager_urls, data.deploy_url, data.deploy_urls);
     } catch (error) {
         showToast(error.message || '获取安装命令失败', 'error');
+    }
+}
+
+async function showFRPSCleanupCommand(serverId) {
+    try {
+        const data = await apiRequest(`/api/frps/server/${serverId}/cleanup?system=linux`);
+        const code = document.querySelector('#frpc-config-output code');
+        if (code) {
+            code.textContent = data.command || '';
+        }
+        updateSecurityProfileHint('balanced');
+        openModal('frpc-modal');
+    } catch (error) {
+        showToast(error.message || '获取清理命令失败', 'error');
     }
 }
 
@@ -1445,40 +1503,11 @@ function showDeployModal(server, command, managerUrls = [], deployUrl = '', depl
     openModal('deploy-modal');
     triggerFastStatusSync();
 }
-function showSystemSelect(serverId, portId) {
+function showSystemSelect(serverId, portId, action = 'deploy-frpc') {
     state.selectedDeploy.serverId = serverId;
     state.selectedDeploy.portId = portId;
-    populateDeployNodeSelect();
+    state.selectedDeploy.action = action;
     openModal('system-select-modal');
-}
-
-function populateDeployNodeSelect() {
-    const select = document.getElementById('deploy-link-node-select');
-    if (!select) {
-        return;
-    }
-    const current = String(select.value || '').trim();
-    const options = ['<option value="">不绑定节点（仅生成部署命令）</option>'];
-    state.agentNodes.forEach((node) => {
-        const nodeId = String(node?.id || '').trim();
-        if (!nodeId) {
-            return;
-        }
-        const nodeName = String(node?.name || nodeId).trim();
-        options.push(`<option value="${safeAttr(nodeId)}">${safeHtml(nodeName)} (${safeHtml(nodeId)})</option>`);
-    });
-    select.innerHTML = options.join('');
-    if (current && state.agentNodes.some((node) => String(node?.id || '').trim() === current)) {
-        select.value = current;
-    }
-}
-
-function getDeployLinkedNodeId() {
-    const select = document.getElementById('deploy-link-node-select');
-    if (!select) {
-        return '';
-    }
-    return String(select.value || '').trim();
 }
 
 function triggerFastStatusSync() {
@@ -1489,37 +1518,37 @@ function triggerFastStatusSync() {
 
 async function selectSystem(system) {
     closeModal('system-select-modal');
-    const { serverId, portId } = state.selectedDeploy;
+    const { serverId, portId, action } = state.selectedDeploy;
     if (!serverId || !portId) {
         showToast('未选择转发规则', 'error');
         return;
     }
     try {
         const securityProfile = getSecurityProfile();
-        const linkedNodeId = getDeployLinkedNodeId();
         saveSecurityProfile(securityProfile);
         const query = new URLSearchParams({
             system: String(system || 'linux'),
             security_profile: String(securityProfile || 'balanced'),
         });
-        if (linkedNodeId) {
-            query.set('node_id', linkedNodeId);
-        }
+        const route = action === 'cleanup-frpc'
+            ? `/api/frps/server/${serverId}/port/${portId}/cleanup`
+            : `/api/frps/server/${serverId}/port/${portId}/deploy`;
         const data = await apiRequest(
-            `/api/frps/server/${serverId}/port/${portId}/deploy?${query.toString()}`
+            `${route}?${query.toString()}`
         );
         const code = document.querySelector('#frpc-config-output code');
         if (code) {
             code.textContent = data.command || '';
         }
-        updateSecurityProfileHint(data.security_profile?.id || securityProfile);
-        if (data.linked_runtime?.id) {
-            showToast('已绑定节点并创建可控客户端应用，可在“节点与应用”中开关/删除', 'success');
-            await loadAgentData(false);
+        if (action === 'cleanup-frpc') {
+            updateSecurityProfileHint('balanced');
+        } else {
+            updateSecurityProfileHint(data.security_profile?.id || securityProfile);
+            showToast('命令已生成，执行后可点规则里的“检测”确认是否生效', 'success');
         }
         openModal('frpc-modal');
     } catch (error) {
-        showToast(error.message || '生成客户端命令失败', 'error');
+        showToast(error.message || '生成命令失败', 'error');
     }
 }
 
