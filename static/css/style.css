@@ -544,6 +544,75 @@ body {
     overflow: hidden;
 }
 
+.console-quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.console-link-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.console-guide {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.guide-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+}
+
+.guide-card h4 {
+    margin-bottom: 8px;
+    color: var(--highlight);
+    font-size: 0.95rem;
+}
+
+.guide-card p {
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    margin-bottom: 6px;
+}
+
+.guide-card p:last-child {
+    margin-bottom: 0;
+}
+
+.console-action-edit-item {
+    display: grid;
+    grid-template-columns: 1fr 2fr auto;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.console-action-edit-item input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+}
+
+.console-editor-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
 .terminal-output {
     height: 400px;
     overflow-y: auto;
@@ -583,6 +652,16 @@ body {
     font-family: inherit;
     font-size: 0.9rem;
     outline: none;
+}
+
+@media (max-width: 900px) {
+    .console-guide {
+        grid-template-columns: 1fr;
+    }
+
+    .console-action-edit-item {
+        grid-template-columns: 1fr;
+    }
 }
 
 .modal {

@@ -1,6 +1,6 @@
 from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import re
 import secrets
@@ -14,25 +14,44 @@ from werkzeug.security import check_password_hash, generate_password_hash
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from utils.config_manager import (
+    complete_agent_job,
+    create_agent_job,
+    create_agent_node,
     add_frps_server,
     add_port_mapping,
+    delete_agent_node,
     delete_frpc_config,
     delete_frps_server,
     delete_port_mapping,
+    get_agent_job,
+    get_agent_jobs,
+    get_agent_node,
+    get_agent_nodes,
+    get_agent_runtime,
+    get_agent_runtimes,
     get_frpc_configs,
     get_auth_config,
     get_frps_server,
     get_frps_servers,
     is_auth_initialized,
+    lease_agent_job_for_node,
+    mark_agent_job_running,
+    rotate_agent_node_token,
     save_frpc_config,
     set_admin_credentials,
+    touch_agent_node,
+    update_agent_job,
+    update_agent_node,
     update_frps_server,
     update_port_mapping,
+    upsert_agent_runtime,
+    verify_agent_node_token,
 )
 from utils.deploy_commands import (
     build_frpc_config,
     build_frpc_deploy_command,
     build_frps_deploy_command,
+    get_security_profile_summary,
 )
 from utils.validators import (
     ValidationError,
@@ -40,6 +59,7 @@ from utils.validators import (
     validate_port_update,
     validate_server_create,
     validate_server_update,
+    validate_security_profile,
     validate_system,
 )
 
@@ -55,14 +75,38 @@ TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 TOKEN_LENGTH = 32
 DEPLOY_KEY_LENGTH = 48
 SENSITIVE_SERVER_FIELDS = {'deploy_key'}
+SENSITIVE_NODE_FIELDS = {'token_hash'}
+AGENT_API_PREFIX = '/api/agent/v1/'
+ALLOWED_AGENT_JOB_TYPES = {
+    'instance.ensure_running',
+    'instance.ensure_stopped',
+}
+MAX_RUNTIME_COMMAND_LENGTH = 1024
+SERVICE_IDENTIFIER_PATTERN = re.compile(r'^[A-Za-z0-9_.@:-]{1,128}$')
+
+LOGIN_RATE_LIMIT = int(os.environ.get('FRP_LOGIN_RATE_LIMIT', '10'))
+LOGIN_RATE_WINDOW = int(os.environ.get('FRP_LOGIN_RATE_WINDOW_SEC', '300'))
+SETUP_RATE_LIMIT = int(os.environ.get('FRP_SETUP_RATE_LIMIT', '10'))
+SETUP_RATE_WINDOW = int(os.environ.get('FRP_SETUP_RATE_WINDOW_SEC', '300'))
+DEPLOY_SCRIPT_RATE_LIMIT = int(os.environ.get('FRP_DEPLOY_RATE_LIMIT', '30'))
+DEPLOY_SCRIPT_RATE_WINDOW = int(os.environ.get('FRP_DEPLOY_RATE_WINDOW_SEC', '60'))
+AGENT_PULL_RATE_LIMIT = int(os.environ.get('FRP_AGENT_PULL_RATE_LIMIT', '120'))
+AGENT_PULL_RATE_WINDOW = int(os.environ.get('FRP_AGENT_PULL_RATE_WINDOW_SEC', '60'))
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('FRP_MANAGER_SECRET_KEY') or os.urandom(32).hex()
+configured_secret_key = str(os.environ.get('FRP_MANAGER_SECRET_KEY', '')).strip()
+app.secret_key = configured_secret_key or os.urandom(32).hex()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FRP_SESSION_SECURE', '0') == '1'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=int(os.environ.get('FRP_SESSION_LIFETIME_HOURS', '12')))
 status_cache = {}
 status_cache_lock = threading.Lock()
+rate_limit_cache = {}
+rate_limit_lock = threading.Lock()
+
+if not configured_secret_key and os.environ.get('FLASK_DEBUG', '0') != '1':
+    print('[security] FRP_MANAGER_SECRET_KEY not set; sessions will be invalidated after restart.', file=sys.stderr)
 
 
 def success_response(payload=None, status_code=200):
@@ -83,6 +127,33 @@ def parse_json_body():
     if not isinstance(body, dict):
         raise ValidationError('请求体必须是 JSON 对象')
     return body
+
+
+def get_client_ip():
+    trust_proxy = os.environ.get('FRP_TRUST_PROXY', '0') == '1'
+    if trust_proxy:
+        forwarded_for = str(request.headers.get('X-Forwarded-For', '')).split(',')[0].strip()
+        if forwarded_for:
+            return forwarded_for
+    return str(request.remote_addr or '').strip() or 'unknown'
+
+
+def hit_rate_limit(scope, key, limit, window_seconds):
+    if limit <= 0 or window_seconds <= 0:
+        return False
+
+    now = time.monotonic()
+    cache_key = f'{scope}:{key}'
+    with rate_limit_lock:
+        bucket = rate_limit_cache.get(cache_key, [])
+        threshold = now - window_seconds
+        bucket = [ts for ts in bucket if ts >= threshold]
+        if len(bucket) >= limit:
+            rate_limit_cache[cache_key] = bucket
+            return True
+        bucket.append(now)
+        rate_limit_cache[cache_key] = bucket
+    return False
 
 
 def get_logged_in_user():
@@ -140,12 +211,138 @@ def normalize_base_url(raw_url):
 
 
 def get_request_base_url():
-    forwarded_host = str(request.headers.get('X-Forwarded-Host', '')).split(',')[0].strip()
-    if forwarded_host:
-        forwarded_proto = str(request.headers.get('X-Forwarded-Proto', '')).split(',')[0].strip()
-        scheme = forwarded_proto or request.scheme or 'http'
-        return normalize_base_url(f'{scheme}://{forwarded_host}')
+    trust_proxy = os.environ.get('FRP_TRUST_PROXY', '0') == '1'
+    if trust_proxy:
+        forwarded_host = str(request.headers.get('X-Forwarded-Host', '')).split(',')[0].strip()
+        if forwarded_host:
+            forwarded_proto = str(request.headers.get('X-Forwarded-Proto', '')).split(',')[0].strip()
+            scheme = forwarded_proto or request.scheme or 'http'
+            return normalize_base_url(f'{scheme}://{forwarded_host}')
     return normalize_base_url(request.url_root)
+
+
+def validate_runtime_command(text, field_label):
+    command = str(text or '').strip()
+    if not command:
+        raise ValidationError(f'{field_label}不能为空')
+    if len(command) > MAX_RUNTIME_COMMAND_LENGTH:
+        raise ValidationError(f'{field_label}长度不能超过 {MAX_RUNTIME_COMMAND_LENGTH} 字符')
+    if '\n' in command or '\r' in command or '\x00' in command:
+        raise ValidationError(f'{field_label}不能包含换行或空字符')
+    return command
+
+
+def validate_service_identifier(text, field_label='服务名'):
+    value = str(text or '').strip()
+    if not value:
+        raise ValidationError(f'{field_label}不能为空')
+    if not SERVICE_IDENTIFIER_PATTERN.fullmatch(value):
+        raise ValidationError(f'{field_label}格式不正确')
+    return value
+
+
+def build_template_commands(template_name, service_name):
+    normalized_template = str(template_name or '').strip().lower()
+    normalized_service = validate_service_identifier(service_name)
+    if normalized_template == 'systemd':
+        return {
+            'start_command': f'systemctl start {normalized_service}',
+            'stop_command': f'systemctl stop {normalized_service}',
+            'check_command': f'systemctl is-active --quiet {normalized_service}',
+            'command_template': 'systemd',
+            'service_name': normalized_service,
+        }
+    if normalized_template == 'service':
+        return {
+            'start_command': f'service {normalized_service} start',
+            'stop_command': f'service {normalized_service} stop',
+            'check_command': f'service {normalized_service} status',
+            'command_template': 'service',
+            'service_name': normalized_service,
+        }
+    raise ValidationError('command_template 仅支持 systemd 或 service')
+
+
+def normalize_runtime_metadata(metadata):
+    if not isinstance(metadata, dict):
+        raise ValidationError('metadata 必须是对象')
+
+    normalized = dict(metadata)
+    template_name = str(normalized.get('command_template', '')).strip().lower()
+    service_name = str(normalized.get('service_name', '')).strip()
+
+    if template_name:
+        template_commands = build_template_commands(template_name, service_name)
+        for key, value in template_commands.items():
+            normalized[key] = value
+
+    return normalized
+
+
+def validate_runtime_metadata(metadata, require_all_commands=True):
+    normalized = normalize_runtime_metadata(metadata)
+    if require_all_commands:
+        normalized['start_command'] = validate_runtime_command(normalized.get('start_command', ''), '启动命令')
+        normalized['stop_command'] = validate_runtime_command(normalized.get('stop_command', ''), '停止命令')
+        if str(normalized.get('check_command', '')).strip():
+            normalized['check_command'] = validate_runtime_command(normalized.get('check_command', ''), '检查命令')
+    else:
+        if 'start_command' in normalized and str(normalized.get('start_command', '')).strip():
+            normalized['start_command'] = validate_runtime_command(normalized.get('start_command', ''), '启动命令')
+        if 'stop_command' in normalized and str(normalized.get('stop_command', '')).strip():
+            normalized['stop_command'] = validate_runtime_command(normalized.get('stop_command', ''), '停止命令')
+        if 'check_command' in normalized and str(normalized.get('check_command', '')).strip():
+            normalized['check_command'] = validate_runtime_command(normalized.get('check_command', ''), '检查命令')
+    return normalized
+
+
+def require_runtime_command_for_state(runtime, desired_state):
+    metadata = validate_runtime_metadata(
+        runtime.get('metadata') if isinstance(runtime.get('metadata'), dict) else {},
+        require_all_commands=True,
+    )
+    command_key = 'start_command' if desired_state == 'running' else 'stop_command'
+    command_name = '启动命令' if desired_state == 'running' else '停止命令'
+    if not str(metadata.get(command_key, '')).strip():
+        raise ValidationError(f'该应用未配置{command_name}，无法下发任务')
+
+
+def get_job_audit_context(via='api'):
+    user = get_logged_in_user() if is_logged_in() else 'system'
+    user_agent = str(request.headers.get('User-Agent', '')).strip()
+    if len(user_agent) > 256:
+        user_agent = user_agent[:256]
+    return {
+        'created_by': user,
+        'created_from_ip': get_client_ip(),
+        'created_via': via,
+        'created_from_path': str(request.path or ''),
+        'created_user_agent': user_agent,
+    }
+
+
+def is_same_origin_request():
+    origin = str(request.headers.get('Origin', '')).strip()
+    referer = str(request.headers.get('Referer', '')).strip()
+    expected = get_request_base_url()
+
+    if origin:
+        return normalize_base_url(origin) == expected
+    if referer:
+        parsed = urlparse(referer)
+        referer_base = normalize_base_url(f'{parsed.scheme}://{parsed.netloc}')
+        return referer_base == expected
+    return True
+
+
+def is_csrf_exempt_path(path):
+    if path.startswith(AGENT_API_PREFIX):
+        return True
+    if path.startswith('/api/frps/server/') and path.endswith('/report'):
+        return True
+    if path.startswith('/api/frps/server/') and path.endswith('/deploy.sh'):
+        return True
+    return False
 
 
 def get_manager_base_urls(server=None):
@@ -182,6 +379,50 @@ def sanitize_server(server):
 
 def sanitize_servers(servers):
     return [sanitize_server(server) for server in servers]
+
+
+def sanitize_agent_node(node):
+    if not isinstance(node, dict):
+        return node
+    sanitized = dict(node)
+    for field in SENSITIVE_NODE_FIELDS:
+        sanitized.pop(field, None)
+    return sanitized
+
+
+def sanitize_agent_nodes(nodes):
+    return [sanitize_agent_node(node) for node in nodes]
+
+
+def get_bearer_token():
+    auth_header = str(request.headers.get('Authorization', '')).strip()
+    if not auth_header:
+        return ''
+    prefix = 'bearer '
+    if auth_header.lower().startswith(prefix):
+        return auth_header[len(prefix):].strip()
+    return ''
+
+
+def parse_agent_auth_payload():
+    payload = parse_json_body()
+    node_id = str(payload.get('node_id', '')).strip()
+    token = get_bearer_token()
+    if not node_id:
+        raise ValidationError('node_id 不能为空')
+    if not token:
+        raise ValidationError('缺少 Bearer token')
+    return node_id, token, payload
+
+
+def ensure_agent_identity():
+    node_id, token, payload = parse_agent_auth_payload()
+    if not verify_agent_node_token(node_id, token):
+        return None, None, error_response('agent 认证失败', 401)
+    node = get_agent_node(node_id)
+    if not node:
+        return None, None, error_response('节点不存在', 404)
+    return node, payload, None
 
 
 def ensure_server_deploy_key(server):
@@ -419,6 +660,7 @@ def enforce_auth_flow():
     path = request.path or ''
     is_report_callback = path.startswith('/api/frps/server/') and path.endswith('/report')
     is_deploy_script = path.startswith('/api/frps/server/') and path.endswith('/deploy.sh')
+    is_agent_v1_api = path.startswith(AGENT_API_PREFIX)
 
     if endpoint == 'static':
         return None
@@ -445,7 +687,7 @@ def enforce_auth_flow():
     if path == '/setup':
         return redirect(url_for('index'))
 
-    if path in auth_allowed_paths or path in auth_allowed_api_paths or is_report_callback or is_deploy_script:
+    if path in auth_allowed_paths or path in auth_allowed_api_paths or is_report_callback or is_deploy_script or is_agent_v1_api:
         return None
 
     if is_logged_in():
@@ -454,6 +696,72 @@ def enforce_auth_flow():
     if api_request:
         return error_response('未登录或登录已过期', 401)
     return redirect(url_for('login_page'))
+
+
+@app.before_request
+def enforce_security_controls():
+    path = request.path or ''
+    method = (request.method or 'GET').upper()
+
+    if request.endpoint == 'static':
+        return None
+
+    ip = get_client_ip()
+    is_api = path.startswith('/api/')
+
+    if method in {'POST', 'PUT', 'DELETE', 'PATCH'} and is_logged_in() and not is_csrf_exempt_path(path):
+        if not is_same_origin_request():
+            if is_api:
+                return error_response('请求来源无效', 403)
+            return Response('Forbidden', status=403)
+
+    if path == '/login' and method == 'POST':
+        if hit_rate_limit('login', ip, LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW):
+            return Response('登录尝试过于频繁，请稍后再试', status=429, mimetype='text/plain; charset=utf-8')
+
+    if path == '/setup' and method == 'POST':
+        if hit_rate_limit('setup', ip, SETUP_RATE_LIMIT, SETUP_RATE_WINDOW):
+            return Response('初始化提交过于频繁，请稍后再试', status=429, mimetype='text/plain; charset=utf-8')
+
+    if path.startswith('/api/frps/server/') and path.endswith('/deploy.sh'):
+        if hit_rate_limit('deploy_script', ip, DEPLOY_SCRIPT_RATE_LIMIT, DEPLOY_SCRIPT_RATE_WINDOW):
+            return Response('echo "请求过于频繁" >&2\nexit 1\n', status=429, mimetype='text/plain; charset=utf-8')
+
+    if path == '/api/agent/v1/pull' and method == 'POST':
+        payload = request.get_json(silent=True)
+        node_id = str(payload.get('node_id', '')).strip() if isinstance(payload, dict) else ''
+        key = f'{ip}:{node_id or "unknown"}'
+        if hit_rate_limit('agent_pull', key, AGENT_PULL_RATE_LIMIT, AGENT_PULL_RATE_WINDOW):
+            return error_response('拉取任务过于频繁，请稍后再试', 429)
+
+    return None
+
+
+@app.after_request
+def apply_security_headers(response):
+    path = request.path or ''
+
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'same-origin'
+    response.headers['Permissions-Policy'] = 'geolocation=(), camera=(), microphone=()'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'"
+    )
+
+    if path.startswith('/api/') or path in {'/', '/login', '/setup'}:
+        response.headers['Cache-Control'] = 'no-store'
+
+    if app.config.get('SESSION_COOKIE_SECURE'):
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+
+    return response
 
 
 @app.route('/setup', methods=['GET', 'POST'])
@@ -470,6 +778,12 @@ def setup_page():
     password = request.form.get('password', '')
     confirm_password = request.form.get('confirm_password', '')
 
+    expected_setup_token = str(os.environ.get('FRP_SETUP_TOKEN', '')).strip()
+    if expected_setup_token:
+        supplied_setup_token = str(request.form.get('setup_token', '')).strip() or str(request.headers.get('X-Setup-Token', '')).strip()
+        if not supplied_setup_token or not secrets.compare_digest(supplied_setup_token, expected_setup_token):
+            return render_template('setup.html', error='初始化令牌无效', username=str(username or '').strip()), 403
+
     try:
         normalized_username, normalized_password = validate_auth_payload(username, password, confirm_password)
     except ValidationError as error:
@@ -477,6 +791,8 @@ def setup_page():
 
     password_hash = generate_password_hash(normalized_password)
     set_admin_credentials(normalized_username, password_hash)
+    session.clear()
+    session.permanent = True
     session[SESSION_USER_KEY] = normalized_username
     return redirect(url_for('index'))
 
@@ -502,13 +818,15 @@ def login_page():
     if not check_password_hash(str(auth.get('password_hash', '')), password):
         return render_template('login.html', error='账号或密码错误', username=username), 401
 
+    session.clear()
+    session.permanent = True
     session[SESSION_USER_KEY] = username
     return redirect(url_for('index'))
 
 
 @app.route('/logout', methods=['GET', 'POST'])
 def logout():
-    session.pop(SESSION_USER_KEY, None)
+    session.clear()
     if request.path.startswith('/api/'):
         return success_response()
     if is_auth_initialized():
@@ -601,13 +919,13 @@ def get_frps_deploy_script(server_id):
     if not server:
         return Response('echo "FRPS 服务器不存在" >&2\nexit 1\n', status=404, mimetype='text/plain; charset=utf-8')
 
-    deploy_key = str(request.args.get('deploy_key', '')).strip()
+    deploy_key = str(request.headers.get('X-Deploy-Key', '')).strip() or str(request.args.get('deploy_key', '')).strip()
     expected_key = ensure_server_deploy_key(server)
     if not deploy_key or not expected_key or not secrets.compare_digest(deploy_key, expected_key):
         return Response('echo "deploy_key 无效" >&2\nexit 1\n', status=403, mimetype='text/plain; charset=utf-8')
 
     deploy_payload = build_frps_deploy_payload(server)
-    script = deploy_payload['deploy_script'].strip()
+    script = str(deploy_payload.get('deploy_script', '')).strip()
     body = '#!/usr/bin/env bash\nset -euo pipefail\n\n' + script + '\n'
     response = Response(body, mimetype='text/plain; charset=utf-8')
     response.headers['Cache-Control'] = 'no-store'
@@ -749,6 +1067,7 @@ def toggle_port(server_id, port_id):
 
 @app.route('/api/frps/server/<server_id>/generate_frpc', methods=['GET'])
 def generate_frpc_for_server(server_id):
+    security_profile = validate_security_profile(request.args.get('security_profile', 'balanced'))
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
@@ -756,13 +1075,15 @@ def generate_frpc_for_server(server_id):
     if addr_error:
         return addr_error
 
-    config = build_frpc_config(server, server.get('ports', []))
-    return success_response({'config': config, 'server': server})
+    profile_summary = get_security_profile_summary(security_profile)
+    config = build_frpc_config(server, server.get('ports', []), security_profile=profile_summary['id'])
+    return success_response({'config': config, 'server': server, 'security_profile': profile_summary})
 
 
 @app.route('/api/frps/server/<server_id>/port/<port_id>/deploy', methods=['GET'])
 def generate_frpc_deploy(server_id, port_id):
     system = validate_system(request.args.get('system', 'linux'))
+    security_profile = validate_security_profile(request.args.get('security_profile', 'balanced'))
     server = get_frps_server(server_id)
     if not server:
         return error_response('服务器不存在', 404)
@@ -774,8 +1095,9 @@ def generate_frpc_deploy(server_id, port_id):
     if not port:
         return error_response('端口映射不存在', 404)
 
-    command = build_frpc_deploy_command(server, port, system=system)
-    return success_response({'command': command})
+    profile_summary = get_security_profile_summary(security_profile)
+    command = build_frpc_deploy_command(server, port, system=system, security_profile=profile_summary['id'])
+    return success_response({'command': command, 'security_profile': profile_summary})
 
 
 @app.route('/api/frpc/configs', methods=['GET'])
@@ -796,6 +1118,535 @@ def delete_frpc(config_id):
     if not deleted:
         return error_response('客户端配置不存在', 404)
     return success_response()
+
+
+@app.route('/api/agent/nodes', methods=['GET'])
+def list_agent_nodes():
+    return jsonify(sanitize_agent_nodes(get_agent_nodes()))
+
+
+@app.route('/api/agent/node', methods=['POST'])
+def create_agent_node_route():
+    payload = parse_json_body()
+    name = str(payload.get('name', '')).strip()
+    if not name:
+        raise ValidationError('节点名称不能为空')
+
+    labels = payload.get('labels')
+    if labels is None:
+        labels = []
+    if not isinstance(labels, list):
+        raise ValidationError('labels 必须是数组')
+
+    agent_token = generate_deploy_key()
+    created = create_agent_node(
+        {
+            'name': name,
+            'labels': [str(item).strip() for item in labels if str(item).strip()],
+            'hostname': str(payload.get('hostname', '')).strip(),
+            'platform': str(payload.get('platform', '')).strip(),
+            'agent_version': str(payload.get('agent_version', '')).strip(),
+            'status': 'offline',
+        },
+        token=agent_token,
+    )
+    return success_response({'node': sanitize_agent_node(created), 'agent_token': agent_token}, status_code=201)
+
+
+@app.route('/api/agent/node/<node_id>', methods=['GET'])
+def get_agent_node_route(node_id):
+    node = get_agent_node(node_id)
+    if not node:
+        return error_response('节点不存在', 404)
+    return success_response({'node': sanitize_agent_node(node)})
+
+
+@app.route('/api/agent/node/<node_id>', methods=['PUT'])
+def update_agent_node_route(node_id):
+    payload = parse_json_body()
+    updates = {}
+
+    if 'name' in payload:
+        name = str(payload.get('name', '')).strip()
+        if not name:
+            raise ValidationError('节点名称不能为空')
+        updates['name'] = name
+
+    if 'labels' in payload:
+        labels = payload.get('labels')
+        if not isinstance(labels, list):
+            raise ValidationError('labels 必须是数组')
+        updates['labels'] = [str(item).strip() for item in labels if str(item).strip()]
+
+    if 'hostname' in payload:
+        updates['hostname'] = str(payload.get('hostname', '')).strip()
+    if 'platform' in payload:
+        updates['platform'] = str(payload.get('platform', '')).strip()
+    if 'agent_version' in payload:
+        updates['agent_version'] = str(payload.get('agent_version', '')).strip()
+    if 'status' in payload:
+        updates['status'] = str(payload.get('status', '')).strip() or 'unknown'
+
+    if not updates:
+        raise ValidationError('至少需要一个可更新字段')
+
+    updated = update_agent_node(node_id, updates)
+    if not updated:
+        return error_response('节点不存在', 404)
+    return success_response()
+
+
+@app.route('/api/agent/node/<node_id>', methods=['DELETE'])
+def delete_agent_node_route(node_id):
+    deleted = delete_agent_node(node_id)
+    if not deleted:
+        return error_response('节点不存在', 404)
+    return success_response()
+
+
+@app.route('/api/agent/node/<node_id>/rotate-token', methods=['POST'])
+def rotate_agent_node_token_route(node_id):
+    node = get_agent_node(node_id)
+    if not node:
+        return error_response('节点不存在', 404)
+
+    new_token = generate_deploy_key()
+    rotated = rotate_agent_node_token(node_id, new_token)
+    if not rotated:
+        return error_response('节点不存在', 404)
+
+    return success_response({'node_id': node_id, 'agent_token': new_token})
+
+
+def build_agent_script_urls(node_id):
+    script_urls = []
+    seen = set()
+    for base_url in get_manager_base_urls():
+        script_url = f"{base_url}/static/agent/frp_agent.py"
+        if script_url in seen:
+            continue
+        seen.add(script_url)
+        script_urls.append(script_url)
+    return script_urls
+
+
+def build_agent_bootstrap_command(node_id, token, manager_url, script_url):
+    return (
+        "mkdir -p /opt/frp-agent && "
+        "curl -fsSL "
+        f"{shell_single_quote(script_url)} "
+        "-o /opt/frp-agent/frp_agent.py && "
+        f"NODE_ID={shell_single_quote(node_id)} "
+        f"NODE_TOKEN={shell_single_quote(token)} "
+        f"MANAGER_URL={shell_single_quote(manager_url)} "
+        "POLL_INTERVAL=5 "
+        "python3 /opt/frp-agent/frp_agent.py"
+    )
+
+
+@app.route('/api/agent/node/<node_id>/bootstrap', methods=['POST'])
+def build_agent_bootstrap(node_id):
+    node = get_agent_node(node_id)
+    if not node:
+        return error_response('节点不存在', 404)
+
+    new_token = generate_deploy_key()
+    rotated = rotate_agent_node_token(node_id, new_token)
+    if not rotated:
+        return error_response('节点不存在', 404)
+
+    script_urls = build_agent_script_urls(node_id)
+    if not script_urls:
+        return error_response('无法生成 agent 脚本地址', 422)
+
+    manager_urls = get_manager_base_urls()
+    manager_url = manager_urls[0] if manager_urls else ''
+    command = build_agent_bootstrap_command(node_id, new_token, manager_url, script_urls[0])
+    return success_response(
+        {
+            'node_id': node_id,
+            'agent_token': new_token,
+            'manager_url': manager_url,
+            'script_url': script_urls[0],
+            'script_urls': script_urls,
+            'command': command,
+        }
+    )
+
+
+def build_agent_job_payload(job_type, node_id, payload, max_attempts=1, idempotency_key='', audit_context=None):
+    normalized_type = str(job_type or '').strip()
+    normalized_node_id = str(node_id or '').strip()
+    if not normalized_type:
+        raise ValidationError('任务类型不能为空')
+    if normalized_type not in ALLOWED_AGENT_JOB_TYPES:
+        raise ValidationError('不支持的任务类型')
+    if not normalized_node_id:
+        raise ValidationError('node_id 不能为空')
+    if not get_agent_node(normalized_node_id):
+        raise ValidationError('目标节点不存在')
+
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    normalized_key = str(idempotency_key or '').strip() or secrets.token_hex(16)
+    audit = audit_context if isinstance(audit_context, dict) else {}
+    return {
+        'node_id': normalized_node_id,
+        'type': normalized_type,
+        'payload': normalized_payload,
+        'max_attempts': max(1, int(max_attempts)),
+        'idempotency_key': normalized_key,
+        'created_by': str(audit.get('created_by', '')).strip(),
+        'created_from_ip': str(audit.get('created_from_ip', '')).strip(),
+        'created_via': str(audit.get('created_via', '')).strip() or 'api',
+        'created_from_path': str(audit.get('created_from_path', '')).strip(),
+        'created_user_agent': str(audit.get('created_user_agent', '')).strip(),
+    }
+
+
+@app.route('/api/agent/jobs', methods=['GET'])
+def list_agent_jobs():
+    node_id = str(request.args.get('node_id', '')).strip() or None
+    status_param = str(request.args.get('status', '')).strip()
+    statuses = [item.strip() for item in status_param.split(',') if item.strip()] if status_param else None
+    return jsonify(get_agent_jobs(node_id=node_id, statuses=statuses))
+
+
+@app.route('/api/agent/job', methods=['POST'])
+def create_agent_job_route():
+    body = parse_json_body()
+    audit_context = get_job_audit_context(via='admin_api')
+    payload = build_agent_job_payload(
+        job_type=body.get('type'),
+        node_id=body.get('node_id'),
+        payload=body.get('payload'),
+        max_attempts=body.get('max_attempts', 1),
+        idempotency_key=body.get('idempotency_key', ''),
+        audit_context=audit_context,
+    )
+    try:
+        created = create_agent_job(payload)
+    except ValueError as error:
+        raise ValidationError(str(error))
+    return success_response({'job': created}, status_code=201)
+
+
+@app.route('/api/agent/jobs/batch', methods=['POST'])
+def create_agent_batch_jobs_route():
+    body = parse_json_body()
+    audit_context = get_job_audit_context(via='admin_batch_api')
+    node_ids = body.get('node_ids')
+    if not isinstance(node_ids, list) or not node_ids:
+        raise ValidationError('node_ids 必须是非空数组')
+
+    job_type = body.get('type')
+    payload = body.get('payload')
+    max_attempts = body.get('max_attempts', 1)
+    batch_key = str(body.get('batch_idempotency_key', '')).strip() or secrets.token_hex(16)
+    created_jobs = []
+
+    for node_id in node_ids:
+        normalized_node_id = str(node_id or '').strip()
+        job_payload = build_agent_job_payload(
+            job_type=job_type,
+            node_id=normalized_node_id,
+            payload=payload,
+            max_attempts=max_attempts,
+            idempotency_key=f'{batch_key}:{normalized_node_id}',
+            audit_context=audit_context,
+        )
+        try:
+            created_jobs.append(create_agent_job(job_payload))
+        except ValueError as error:
+            raise ValidationError(str(error))
+
+    return success_response({'jobs': created_jobs}, status_code=201)
+
+
+@app.route('/api/agent/job/<job_id>/retry', methods=['POST'])
+def retry_agent_job_route(job_id):
+    existing = get_agent_job(job_id)
+    if not existing:
+        return error_response('任务不存在', 404)
+
+    status = str(existing.get('status', '')).strip()
+    if status != 'failed':
+        return error_response('仅失败任务允许重试', 409)
+
+    try:
+        retry_payload = build_agent_job_payload(
+            job_type=existing.get('type'),
+            node_id=existing.get('node_id'),
+            payload=existing.get('payload') if isinstance(existing.get('payload'), dict) else {},
+            max_attempts=existing.get('max_attempts', 1),
+            idempotency_key=f"retry:{job_id}:{secrets.token_hex(8)}",
+            audit_context=get_job_audit_context(via='retry_api'),
+        )
+        created = create_agent_job(retry_payload)
+    except (ValidationError, ValueError) as error:
+        raise ValidationError(str(error))
+
+    return success_response({'job': created}, status_code=201)
+
+
+@app.route('/api/agent/runtimes', methods=['GET'])
+def list_agent_runtimes():
+    node_id = str(request.args.get('node_id', '')).strip() or None
+    return jsonify(get_agent_runtimes(node_id=node_id))
+
+
+@app.route('/api/agent/runtime', methods=['POST'])
+def create_agent_runtime_route():
+    body = parse_json_body()
+    node_id = str(body.get('node_id', '')).strip()
+    if not node_id:
+        raise ValidationError('node_id 不能为空')
+    if not get_agent_node(node_id):
+        raise ValidationError('目标节点不存在')
+
+    metadata = validate_runtime_metadata(body.get('metadata'), require_all_commands=True)
+
+    runtime_id = str(body.get('id', '')).strip() or secrets.token_hex(12)
+    try:
+        saved = upsert_agent_runtime(
+            {
+                'id': runtime_id,
+                'node_id': node_id,
+                'kind': str(body.get('kind', '')).strip() or 'frpc',
+                'name': str(body.get('name', '')).strip() or runtime_id,
+                'status': str(body.get('status', '')).strip() or 'unknown',
+                'enabled': bool(body.get('enabled', True)),
+                'last_heartbeat_at': str(body.get('last_heartbeat_at', '')).strip(),
+                'metadata': metadata,
+            }
+        )
+    except ValueError as error:
+        raise ValidationError(str(error))
+    return success_response({'runtime': saved}, status_code=201)
+
+
+@app.route('/api/agent/runtime/<runtime_id>', methods=['PUT'])
+def update_agent_runtime_route(runtime_id):
+    current = get_agent_runtime(runtime_id)
+    if not current:
+        return error_response('运行实例不存在', 404)
+
+    body = parse_json_body()
+    merged = dict(current)
+    if 'kind' in body:
+        merged['kind'] = str(body.get('kind', '')).strip() or merged.get('kind', 'frpc')
+    if 'name' in body:
+        merged['name'] = str(body.get('name', '')).strip() or merged.get('name', runtime_id)
+    if 'status' in body:
+        merged['status'] = str(body.get('status', '')).strip() or merged.get('status', 'unknown')
+    if 'enabled' in body:
+        merged['enabled'] = bool(body.get('enabled', True))
+    if 'metadata' in body and isinstance(body.get('metadata'), dict):
+        metadata = dict(merged.get('metadata', {}))
+        metadata.update(validate_runtime_metadata(body.get('metadata'), require_all_commands=False))
+        merged['metadata'] = metadata
+
+    merged['metadata'] = validate_runtime_metadata(merged.get('metadata', {}), require_all_commands=True)
+
+    try:
+        saved = upsert_agent_runtime(merged)
+    except ValueError as error:
+        raise ValidationError(str(error))
+    return success_response({'runtime': saved})
+
+
+def queue_runtime_state_job(runtime_id, desired_state):
+    runtime = get_agent_runtime(runtime_id)
+    if not runtime:
+        return None, error_response('运行实例不存在', 404)
+
+    node_id = str(runtime.get('node_id', '')).strip()
+    if not node_id:
+        return None, error_response('运行实例缺少 node_id', 422)
+
+    try:
+        require_runtime_command_for_state(runtime, desired_state)
+        metadata = validate_runtime_metadata(
+            runtime.get('metadata') if isinstance(runtime.get('metadata'), dict) else {},
+            require_all_commands=True,
+        )
+    except ValidationError as error:
+        return None, error_response(str(error), 422)
+
+    job_type = 'instance.ensure_running' if desired_state == 'running' else 'instance.ensure_stopped'
+    payload = {
+        'runtime_id': runtime_id,
+        'desired_state': desired_state,
+        'kind': runtime.get('kind', ''),
+        'name': runtime.get('name', ''),
+        'metadata': metadata,
+    }
+
+    try:
+        created = create_agent_job(
+            build_agent_job_payload(
+                job_type=job_type,
+                node_id=node_id,
+                payload=payload,
+                max_attempts=1,
+                idempotency_key=f'{runtime_id}:{desired_state}',
+                audit_context=get_job_audit_context(via='runtime_control'),
+            )
+        )
+    except (ValidationError, ValueError) as error:
+        return None, error_response(str(error), 422)
+    return created, None
+
+
+@app.route('/api/agent/runtime/<runtime_id>/ensure-running', methods=['POST'])
+def ensure_runtime_running(runtime_id):
+    created, error = queue_runtime_state_job(runtime_id, 'running')
+    if error:
+        return error
+    return success_response({'job': created}, status_code=201)
+
+
+@app.route('/api/agent/runtime/<runtime_id>/ensure-stopped', methods=['POST'])
+def ensure_runtime_stopped(runtime_id):
+    created, error = queue_runtime_state_job(runtime_id, 'stopped')
+    if error:
+        return error
+    return success_response({'job': created}, status_code=201)
+
+
+@app.route('/api/agent/v1/register', methods=['POST'])
+def agent_register():
+    node, payload, auth_error = ensure_agent_identity()
+    if auth_error:
+        return auth_error
+    if not isinstance(node, dict) or not isinstance(payload, dict):
+        return error_response('agent 身份无效', 401)
+
+    updated = touch_agent_node(
+        node.get('id', ''),
+        {
+            'status': 'online',
+            'hostname': str(payload.get('hostname', '')).strip() or str(node.get('hostname', '')).strip(),
+            'platform': str(payload.get('platform', '')).strip() or str(node.get('platform', '')).strip(),
+            'agent_version': str(payload.get('agent_version', '')).strip() or str(node.get('agent_version', '')).strip(),
+        },
+    )
+    return success_response({'node': sanitize_agent_node(updated)})
+
+
+@app.route('/api/agent/v1/pull', methods=['POST'])
+def agent_pull_jobs():
+    node, payload, auth_error = ensure_agent_identity()
+    if auth_error:
+        return auth_error
+    if not isinstance(node, dict) or not isinstance(payload, dict):
+        return error_response('agent 身份无效', 401)
+
+    lease_seconds = payload.get('lease_seconds', 45)
+    try:
+        lease_seconds = int(lease_seconds)
+    except (TypeError, ValueError):
+        lease_seconds = 45
+
+    touch_agent_node(
+        node.get('id', ''),
+        {
+            'status': 'online',
+            'hostname': str(payload.get('hostname', '')).strip() or str(node.get('hostname', '')).strip(),
+            'platform': str(payload.get('platform', '')).strip() or str(node.get('platform', '')).strip(),
+            'agent_version': str(payload.get('agent_version', '')).strip() or str(node.get('agent_version', '')).strip(),
+        },
+    )
+
+    leased_job = lease_agent_job_for_node(node.get('id', ''), lease_seconds=lease_seconds)
+    if not leased_job:
+        return success_response({'jobs': [], 'poll_after_sec': 10})
+    return success_response({'jobs': [leased_job], 'poll_after_sec': 2})
+
+
+@app.route('/api/agent/v1/jobs/<job_id>/start', methods=['POST'])
+def agent_mark_job_running(job_id):
+    node, payload, auth_error = ensure_agent_identity()
+    if auth_error:
+        return auth_error
+    if not isinstance(node, dict) or not isinstance(payload, dict):
+        return error_response('agent 身份无效', 401)
+
+    lease_id = str(payload.get('lease_id', '')).strip()
+    if not lease_id:
+        raise ValidationError('lease_id 不能为空')
+
+    existing = get_agent_job(job_id)
+    if not existing:
+        return error_response('任务不存在', 404)
+
+    if str(existing.get('status', '')).strip() in {'succeeded', 'failed'}:
+        return success_response({'job': existing})
+
+    running = mark_agent_job_running(job_id, node.get('id', ''), lease_id)
+    if not running:
+        return error_response('任务领取无效或租约已过期', 409)
+    return success_response({'job': running})
+
+
+@app.route('/api/agent/v1/jobs/<job_id>/complete', methods=['POST'])
+def agent_complete_job(job_id):
+    node, payload, auth_error = ensure_agent_identity()
+    if auth_error:
+        return auth_error
+    if not isinstance(node, dict) or not isinstance(payload, dict):
+        return error_response('agent 身份无效', 401)
+
+    lease_id = str(payload.get('lease_id', '')).strip()
+    if not lease_id:
+        raise ValidationError('lease_id 不能为空')
+
+    success = bool(payload.get('success', False))
+    result = payload.get('result')
+    error_text = str(payload.get('error', '')).strip()
+
+    existing = get_agent_job(job_id)
+    if not existing:
+        return error_response('任务不存在', 404)
+
+    if str(existing.get('status', '')).strip() in {'succeeded', 'failed'}:
+        return success_response({'job': existing})
+
+    completed = complete_agent_job(job_id, node.get('id', ''), lease_id, success=success, result=result, error=error_text)
+    if not completed:
+        return error_response('任务完成上报无效', 409)
+    return success_response({'job': completed})
+
+
+@app.route('/api/agent/v1/runtime/report', methods=['POST'])
+def agent_report_runtime():
+    node, payload, auth_error = ensure_agent_identity()
+    if auth_error:
+        return auth_error
+    if not isinstance(node, dict) or not isinstance(payload, dict):
+        return error_response('agent 身份无效', 401)
+
+    runtime = payload.get('runtime')
+    if not isinstance(runtime, dict):
+        raise ValidationError('runtime 必须是对象')
+
+    runtime_id = str(runtime.get('id', '')).strip()
+    if not runtime_id:
+        raise ValidationError('runtime.id 不能为空')
+
+    saved = upsert_agent_runtime(
+        {
+            'id': runtime_id,
+            'node_id': node.get('id', ''),
+            'kind': str(runtime.get('kind', '')).strip() or 'frpc',
+            'name': str(runtime.get('name', '')).strip() or runtime_id,
+            'status': str(runtime.get('status', '')).strip() or 'unknown',
+            'enabled': bool(runtime.get('enabled', True)),
+            'last_heartbeat_at': utc_now_iso(),
+            'metadata': runtime.get('metadata') if isinstance(runtime.get('metadata'), dict) else {},
+        }
+    )
+    touch_agent_node(node.get('id', ''), {'status': 'online'})
+    return success_response({'runtime': saved})
 
 
 if __name__ == '__main__':

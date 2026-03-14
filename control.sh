@@ -20,6 +20,7 @@ if [[ "$SCRIPT_PATH" == "bash" || "$SCRIPT_PATH" == "-bash" || "$SCRIPT_PATH" ==
 fi
 APP_DIR="$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd || pwd)"
 ENV_FILE="$APP_DIR/config.env"
+BACKUP_DIR="$APP_DIR/backups"
 SERVICE_NAME="frp-manager"
 SERVICE_FILE_SYSTEMD="/etc/systemd/system/${SERVICE_NAME}.service"
 SERVICE_FILE_OPENRC="/etc/init.d/${SERVICE_NAME}"
@@ -355,7 +356,7 @@ detect_public_ip() {
 }
 
 show_access_urls() {
-  local port local_ip public_ip
+  local port local_ip public_ip setup_token
   port="$(get_port)"
   local_ip="$(detect_local_ip)"
   public_ip="$(detect_public_ip)"
@@ -369,7 +370,30 @@ show_access_urls() {
   fi
   echo "首次初始化：http://${local_ip}:${port}/setup"
   echo "登录页面：http://${local_ip}:${port}/login"
+  setup_token="$(get_env_key FRP_SETUP_TOKEN)"
+  if [[ -n "$setup_token" ]]; then
+    echo "初始化令牌：$setup_token"
+  fi
   echo "----------------------------------------"
+}
+
+get_manager_base_url_for_agent() {
+  local public_url port local_ip
+  public_url="$(get_env_key FRP_MANAGER_PUBLIC_URL)"
+  if [[ -n "$public_url" ]]; then
+    echo "${public_url%%,*}" | xargs
+    return
+  fi
+
+  port="$(get_port)"
+  local_ip="$(detect_local_ip)"
+  echo "http://${local_ip}:${port}"
+}
+
+shell_single_quote() {
+  local text="${1:-}"
+  text="$(printf '%s' "$text" | sed "s/'/'\"'\"'/g")"
+  printf "'%s'" "$text"
 }
 
 show_logs() {
@@ -430,8 +454,134 @@ show_menu() {
   echo "7) 仅显示访问地址"
   echo "8) 查看最近日志"
   echo "9) 重置管理员账号（重新初始化）"
+  echo "10) Agent 编排控制"
+  echo "11) 备份配置"
+  echo "12) 恢复配置"
+  echo "13) 查看最新备份详情"
   echo "0) 退出"
   echo "----------------------------------"
+}
+
+backup_config_files() {
+  require_root
+  mkdir -p "$BACKUP_DIR"
+
+  local ts archive_file config_file tmp_dir
+  ts="$(date '+%Y%m%d_%H%M%S')"
+  archive_file="$BACKUP_DIR/frp_manager_backup_${ts}.tar.gz"
+  config_file="$APP_DIR/frp_manager/config.json"
+
+  if [[ ! -f "$ENV_FILE" && ! -f "$config_file" ]]; then
+    warn "未找到可备份的配置文件。"
+    return
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  if [[ -f "$ENV_FILE" ]]; then
+    cp -f "$ENV_FILE" "$tmp_dir/config.env"
+  fi
+  if [[ -f "$config_file" ]]; then
+    mkdir -p "$tmp_dir/frp_manager"
+    cp -f "$config_file" "$tmp_dir/frp_manager/config.json"
+  fi
+
+  if ! tar -czf "$archive_file" -C "$tmp_dir" .; then
+    rm -rf "$tmp_dir"
+    warn "备份失败。"
+    return
+  fi
+  rm -rf "$tmp_dir"
+
+  echo "备份完成：$archive_file"
+}
+
+list_backups() {
+  if [[ ! -d "$BACKUP_DIR" ]]; then
+    echo "暂无备份文件。"
+    return
+  fi
+  ls -1 "$BACKUP_DIR"/*.tar.gz 2>/dev/null || echo "暂无备份文件。"
+}
+
+restore_config_files() {
+  require_root
+  mkdir -p "$BACKUP_DIR"
+
+  local archive_file input
+  echo "可用备份："
+  list_backups
+
+  if ! prompt_choice input "请输入要恢复的备份文件名（仅文件名），或输入 0 取消："; then
+    warn "未读取到输入。"
+    return
+  fi
+
+  input="$(printf '%s' "$input" | xargs)"
+  if [[ "$input" == "0" || -z "$input" ]]; then
+    echo "已取消。"
+    return
+  fi
+
+  if [[ "$input" == *"/"* || "$input" == *".."* ]]; then
+    warn "文件名无效。"
+    return
+  fi
+
+  archive_file="$BACKUP_DIR/$input"
+  if [[ ! -f "$archive_file" ]]; then
+    warn "备份文件不存在：$archive_file"
+    return
+  fi
+
+  local confirm=""
+  if ! prompt_choice confirm "恢复会覆盖当前配置，确认继续？[y/N]："; then
+    warn "未读取到输入。"
+    return
+  fi
+  confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$confirm" != "y" && "$confirm" != "yes" ]]; then
+    echo "已取消。"
+    return
+  fi
+
+  if ! tar -xzf "$archive_file" -C "$APP_DIR"; then
+    warn "恢复失败。"
+    return
+  fi
+
+  echo "恢复完成：$archive_file"
+  if service_is_running; then
+    service_restart
+    echo "服务已自动重启。"
+  fi
+  show_access_urls
+}
+
+show_latest_backup_details() {
+  if [[ ! -d "$BACKUP_DIR" ]]; then
+    echo "暂无备份文件。"
+    return
+  fi
+
+  local latest_backup
+  latest_backup="$(ls -1t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -n1 || true)"
+  if [[ -z "$latest_backup" || ! -f "$latest_backup" ]]; then
+    echo "暂无备份文件。"
+    return
+  fi
+
+  local backup_name backup_size backup_time
+  backup_name="$(basename "$latest_backup")"
+  backup_size="$(du -h "$latest_backup" | awk '{print $1}')"
+  backup_time="$(date -r "$latest_backup" '+%Y-%m-%d %H:%M:%S')"
+
+  echo "----------------------------------------"
+  echo "最新备份：$backup_name"
+  echo "时间：$backup_time"
+  echo "大小：$backup_size"
+  echo "包含文件："
+  tar -tzf "$latest_backup" | sed 's#^#- #' || echo "- （读取失败）"
+  echo "----------------------------------------"
 }
 
 prompt_choice() {
@@ -542,6 +692,382 @@ do_change_port() {
   show_access_urls
 }
 
+agent_list_nodes() {
+  local py
+  py="$(pick_python_bin)"
+  "$py" - <<PY
+import sys
+sys.path.insert(0, r"${APP_DIR}")
+from utils.config_manager import get_agent_nodes
+
+nodes = get_agent_nodes()
+if not nodes:
+    print("暂无 Agent 节点")
+    raise SystemExit(0)
+
+for item in nodes:
+    labels = ",".join(item.get("labels", [])) if isinstance(item.get("labels", []), list) else ""
+    print(f"- id={item.get('id','')} name={item.get('name','')} status={item.get('status','unknown')} last_seen={item.get('last_seen_at','')} labels={labels}")
+PY
+}
+
+agent_create_node() {
+  require_root
+  local name labels py
+  if ! prompt_choice name "输入节点名称："; then
+    warn "未读取到输入。"
+    return
+  fi
+  name="$(printf '%s' "$name" | xargs)"
+  if [[ -z "$name" ]]; then
+    warn "节点名称不能为空。"
+    return
+  fi
+
+  if ! prompt_choice labels "输入标签（逗号分隔，可空）："; then
+    warn "未读取到输入。"
+    return
+  fi
+
+  py="$(pick_python_bin)"
+  "$py" - "$name" "$labels" <<PY
+import secrets
+import sys
+sys.path.insert(0, r"${APP_DIR}")
+from utils.config_manager import create_agent_node
+
+name = sys.argv[1].strip()
+raw_labels = sys.argv[2].strip()
+labels = [item.strip() for item in raw_labels.split(',') if item.strip()]
+token = secrets.token_urlsafe(48)[:48]
+created = create_agent_node({
+    "name": name,
+    "labels": labels,
+    "status": "offline",
+}, token)
+
+print(f"节点创建成功: {created.get('id','')}")
+print(f"节点名称: {created.get('name','')}")
+print(f"Agent Token: {token}")
+PY
+}
+
+agent_print_bootstrap_command() {
+  require_root
+  local node_id py manager_url script_url token quoted_script quoted_manager quoted_node quoted_token
+  if ! prompt_choice node_id "输入节点 ID："; then
+    warn "未读取到输入。"
+    return
+  fi
+  node_id="$(printf '%s' "$node_id" | xargs)"
+  if [[ -z "$node_id" ]]; then
+    warn "节点 ID 不能为空。"
+    return
+  fi
+
+  manager_url="$(get_manager_base_url_for_agent)"
+  script_url="${manager_url%/}/static/agent/frp_agent.py"
+  py="$(pick_python_bin)"
+  token="$($py - "$node_id" <<PY
+import secrets
+import sys
+sys.path.insert(0, r"${APP_DIR}")
+from utils.config_manager import get_agent_node, rotate_agent_node_token
+
+node_id = sys.argv[1].strip()
+node = get_agent_node(node_id)
+if not node:
+    print("")
+    raise SystemExit(2)
+
+token = secrets.token_urlsafe(48)[:48]
+ok = rotate_agent_node_token(node_id, token)
+if not ok:
+    print("")
+    raise SystemExit(3)
+print(token)
+PY
+  )" || true
+
+  if [[ -z "$token" ]]; then
+    warn "节点不存在或轮换 token 失败。"
+    return
+  fi
+
+  quoted_script="$(shell_single_quote "$script_url")"
+  quoted_manager="$(shell_single_quote "$manager_url")"
+  quoted_node="$(shell_single_quote "$node_id")"
+  quoted_token="$(shell_single_quote "$token")"
+
+  echo "----------------------------------------"
+  echo "节点 ID: $node_id"
+  echo "管理地址: $manager_url"
+  echo "Agent Token: $token"
+  echo ""
+  echo "在目标服务器执行："
+  echo "mkdir -p /opt/frp-agent && curl -fsSL ${quoted_script} -o /opt/frp-agent/frp_agent.py && NODE_ID=${quoted_node} NODE_TOKEN=${quoted_token} MANAGER_URL=${quoted_manager} POLL_INTERVAL=5 python3 /opt/frp-agent/frp_agent.py"
+  echo "----------------------------------------"
+}
+
+agent_list_runtimes() {
+  local py
+  py="$(pick_python_bin)"
+  "$py" - <<PY
+import sys
+sys.path.insert(0, r"${APP_DIR}")
+from utils.config_manager import get_agent_runtimes
+
+runtimes = get_agent_runtimes()
+if not runtimes:
+    print("暂无运行实例")
+    raise SystemExit(0)
+
+for item in runtimes:
+    print(f"- id={item.get('id','')} name={item.get('name','')} node={item.get('node_id','')} kind={item.get('kind','')} status={item.get('status','unknown')}")
+PY
+}
+
+agent_create_runtime() {
+  require_root
+  local node_id runtime_id runtime_name runtime_kind start_cmd stop_cmd check_cmd py
+  if ! prompt_choice node_id "输入所属节点 ID："; then warn "未读取到输入。"; return; fi
+  if ! prompt_choice runtime_id "输入实例 ID（可空自动生成）："; then warn "未读取到输入。"; return; fi
+  if ! prompt_choice runtime_name "输入实例名称："; then warn "未读取到输入。"; return; fi
+  if ! prompt_choice runtime_kind "输入实例类型（frpc/frps，默认 frpc）："; then warn "未读取到输入。"; return; fi
+  if ! prompt_choice start_cmd "输入启动命令（可空）："; then warn "未读取到输入。"; return; fi
+  if ! prompt_choice stop_cmd "输入停止命令（可空）："; then warn "未读取到输入。"; return; fi
+  if ! prompt_choice check_cmd "输入检查命令（可空）："; then warn "未读取到输入。"; return; fi
+
+  node_id="$(printf '%s' "$node_id" | xargs)"
+  runtime_id="$(printf '%s' "$runtime_id" | xargs)"
+  runtime_name="$(printf '%s' "$runtime_name" | xargs)"
+  runtime_kind="$(printf '%s' "$runtime_kind" | xargs)"
+  runtime_kind="${runtime_kind:-frpc}"
+
+  if [[ -z "$node_id" || -z "$runtime_name" ]]; then
+    warn "节点 ID 和实例名称不能为空。"
+    return
+  fi
+
+  py="$(pick_python_bin)"
+  "$py" - "$node_id" "$runtime_id" "$runtime_name" "$runtime_kind" "$start_cmd" "$stop_cmd" "$check_cmd" <<PY
+import secrets
+import sys
+sys.path.insert(0, r"${APP_DIR}")
+from utils.config_manager import get_agent_node, upsert_agent_runtime
+
+node_id, runtime_id, runtime_name, runtime_kind, start_cmd, stop_cmd, check_cmd = [x.strip() for x in sys.argv[1:8]]
+if not get_agent_node(node_id):
+    print("节点不存在")
+    raise SystemExit(2)
+
+if not runtime_id:
+    runtime_id = secrets.token_hex(12)
+
+runtime = upsert_agent_runtime({
+    "id": runtime_id,
+    "node_id": node_id,
+    "kind": runtime_kind or "frpc",
+    "name": runtime_name,
+    "status": "unknown",
+    "enabled": True,
+    "metadata": {
+        "start_command": start_cmd,
+        "stop_command": stop_cmd,
+        "check_command": check_cmd,
+    },
+})
+print(f"实例已保存: {runtime.get('id','')}")
+PY
+}
+
+agent_queue_runtime_job() {
+  require_root
+  local runtime_id desired py
+  runtime_id="$1"
+  desired="$2"
+  py="$(pick_python_bin)"
+  "$py" - "$runtime_id" "$desired" <<PY
+import secrets
+import sys
+sys.path.insert(0, r"${APP_DIR}")
+from utils.config_manager import get_agent_runtime, create_agent_job
+
+runtime_id = sys.argv[1].strip()
+desired = sys.argv[2].strip()
+runtime = get_agent_runtime(runtime_id)
+if not runtime:
+    print("运行实例不存在")
+    raise SystemExit(2)
+
+node_id = str(runtime.get("node_id", "")).strip()
+if not node_id:
+    print("运行实例缺少 node_id")
+    raise SystemExit(3)
+
+job_type = "instance.ensure_running" if desired == "running" else "instance.ensure_stopped"
+payload = {
+    "runtime_id": runtime_id,
+    "desired_state": desired,
+    "kind": runtime.get("kind", ""),
+    "name": runtime.get("name", ""),
+    "metadata": runtime.get("metadata", {}),
+}
+
+job = create_agent_job({
+    "node_id": node_id,
+    "type": job_type,
+    "payload": payload,
+    "max_attempts": 1,
+    "idempotency_key": f"{runtime_id}:{desired}:{secrets.token_hex(4)}",
+})
+print(f"任务已创建: {job.get('id','')} ({job.get('type','')})")
+PY
+}
+
+agent_start_runtime() {
+  local runtime_id
+  if ! prompt_choice runtime_id "输入要启动的 runtime_id："; then warn "未读取到输入。"; return; fi
+  runtime_id="$(printf '%s' "$runtime_id" | xargs)"
+  if [[ -z "$runtime_id" ]]; then warn "runtime_id 不能为空。"; return; fi
+  agent_queue_runtime_job "$runtime_id" "running"
+}
+
+agent_stop_runtime() {
+  local runtime_id
+  if ! prompt_choice runtime_id "输入要停止的 runtime_id："; then warn "未读取到输入。"; return; fi
+  runtime_id="$(printf '%s' "$runtime_id" | xargs)"
+  if [[ -z "$runtime_id" ]]; then warn "runtime_id 不能为空。"; return; fi
+  agent_queue_runtime_job "$runtime_id" "stopped"
+}
+
+agent_batch_runtime_action() {
+  require_root
+  local raw desired runtime_id
+  desired="$1"
+  if ! prompt_choice raw "输入 runtime_id 列表（逗号分隔）："; then warn "未读取到输入。"; return; fi
+  raw="$(printf '%s' "$raw" | tr '\n' ',' )"
+
+  IFS=',' read -r -a ids <<< "$raw"
+  for runtime_id in "${ids[@]}"; do
+    runtime_id="$(printf '%s' "$runtime_id" | xargs)"
+    if [[ -z "$runtime_id" ]]; then
+      continue
+    fi
+    agent_queue_runtime_job "$runtime_id" "$desired" || true
+  done
+}
+
+agent_list_jobs() {
+  local node_id limit py
+  if ! prompt_choice node_id "按节点筛选（可空）："; then warn "未读取到输入。"; return; fi
+  if ! prompt_choice limit "显示最近多少条任务（默认 20）："; then warn "未读取到输入。"; return; fi
+
+  node_id="$(printf '%s' "$node_id" | xargs)"
+  limit="$(printf '%s' "$limit" | xargs)"
+  if [[ -z "$limit" || ! "$limit" =~ ^[0-9]+$ ]]; then
+    limit="20"
+  fi
+
+  py="$(pick_python_bin)"
+  "$py" - "$node_id" "$limit" <<PY
+import sys
+sys.path.insert(0, r"${APP_DIR}")
+from utils.config_manager import get_agent_jobs
+
+node_id = sys.argv[1].strip()
+limit = int(sys.argv[2])
+
+jobs = get_agent_jobs(node_id=node_id or None)
+jobs = sorted(jobs, key=lambda item: str(item.get("created_at", "")), reverse=True)[:limit]
+if not jobs:
+    print("暂无任务")
+    raise SystemExit(0)
+
+for item in jobs:
+    print(
+        f"- id={item.get('id','')} status={item.get('status','')} "
+        f"type={item.get('type','')} node={item.get('node_id','')} "
+        f"attempts={item.get('attempts',0)}/{item.get('max_attempts',1)} "
+        f"created={item.get('created_at','')} finished={item.get('finished_at','')}"
+    )
+PY
+}
+
+agent_show_job_detail() {
+  local job_id py
+  if ! prompt_choice job_id "输入 job_id："; then warn "未读取到输入。"; return; fi
+  job_id="$(printf '%s' "$job_id" | xargs)"
+  if [[ -z "$job_id" ]]; then
+    warn "job_id 不能为空。"
+    return
+  fi
+
+  py="$(pick_python_bin)"
+  "$py" - "$job_id" <<PY
+import json
+import sys
+sys.path.insert(0, r"${APP_DIR}")
+from utils.config_manager import get_agent_job
+
+job_id = sys.argv[1].strip()
+job = get_agent_job(job_id)
+if not job:
+    print("任务不存在")
+    raise SystemExit(2)
+
+print(json.dumps(job, ensure_ascii=False, indent=2))
+PY
+}
+
+do_agent_control() {
+  if ! require_deployed_env; then
+    return
+  fi
+
+  while true; do
+    echo "=================================="
+    echo " Agent 编排控制"
+    echo "=================================="
+    echo "1) 列出节点"
+    echo "2) 创建节点"
+    echo "3) 生成节点引导命令（轮换 Token）"
+    echo "4) 列出运行实例"
+    echo "5) 创建运行实例"
+    echo "6) 启动单个实例（下发任务）"
+    echo "7) 停止单个实例（下发任务）"
+    echo "8) 批量启动实例（下发任务）"
+    echo "9) 批量停止实例（下发任务）"
+    echo "10) 查看最近任务"
+    echo "11) 查看任务详情"
+    echo "0) 返回上一级"
+    echo "----------------------------------"
+
+    local choice=""
+    if ! prompt_choice choice "请选择操作："; then
+      warn "未读取到输入。"
+      return
+    fi
+
+    case "$choice" in
+      1) agent_list_nodes ;;
+      2) agent_create_node ;;
+      3) agent_print_bootstrap_command ;;
+      4) agent_list_runtimes ;;
+      5) agent_create_runtime ;;
+      6) agent_start_runtime ;;
+      7) agent_stop_runtime ;;
+      8) agent_batch_runtime_action "running" ;;
+      9) agent_batch_runtime_action "stopped" ;;
+      10) agent_list_jobs ;;
+      11) agent_show_job_detail ;;
+      0) return ;;
+      *) echo "无效选项，请重新输入。" ;;
+    esac
+    echo
+  done
+}
+
 main() {
   if is_bootstrap_mode && is_repo_ready "$BOOTSTRAP_DIR"; then
     log "检测到已部署仓库，切换到本地控制器：$BOOTSTRAP_DIR/control.sh"
@@ -596,6 +1122,24 @@ main() {
       9)
         if require_deployed_env; then
           reset_admin_credentials
+        fi
+        ;;
+      10)
+        do_agent_control
+        ;;
+      11)
+        if require_deployed_env; then
+          backup_config_files
+        fi
+        ;;
+      12)
+        if require_deployed_env; then
+          restore_config_files
+        fi
+        ;;
+      13)
+        if require_deployed_env; then
+          show_latest_backup_details
         fi
         ;;
       0) exit 0 ;;

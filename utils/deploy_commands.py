@@ -11,6 +11,23 @@ WINDOWS_PACKAGE_NAME = f'frp_{FRP_VERSION}_{WINDOWS_ARCH}.zip'
 LINUX_FOLDER_NAME = f'frp_{FRP_VERSION}_{LINUX_ARCH}'
 WINDOWS_FOLDER_NAME = f'frp_{FRP_VERSION}_{WINDOWS_ARCH}'
 
+DEFAULT_SECURITY_PROFILE = 'balanced'
+SECURITY_PROFILE_ALIASES = {
+    'default': 'balanced',
+    'recommended': 'balanced',
+    'tls': 'balanced',
+    'balanced': 'balanced',
+    'hybrid': 'hybrid',
+    'double': 'hybrid',
+    'strict': 'mtls',
+    'mtls': 'mtls',
+}
+SECURITY_PROFILE_LABELS = {
+    'balanced': '推荐档：TLS + token（默认）',
+    'hybrid': '增强档：TLS + token + 代理层加密/压缩',
+    'mtls': '严格档：mTLS + token（需证书）',
+}
+
 
 def _value(raw_value):
     if raw_value is None:
@@ -39,7 +56,56 @@ def _shell_single_quote(text):
     return "'" + _value(text).replace("'", "'\"'\"'") + "'"
 
 
-def _build_proxy_section(port):
+def normalize_security_profile(profile):
+    normalized = _value(profile).lower()
+    if not normalized:
+        return DEFAULT_SECURITY_PROFILE
+    return SECURITY_PROFILE_ALIASES.get(normalized, DEFAULT_SECURITY_PROFILE)
+
+
+def get_security_profile_summary(profile):
+    normalized = normalize_security_profile(profile)
+    return {
+        'id': normalized,
+        'label': SECURITY_PROFILE_LABELS.get(normalized, SECURITY_PROFILE_LABELS[DEFAULT_SECURITY_PROFILE]),
+    }
+
+
+def _build_security_common_lines(profile):
+    normalized = normalize_security_profile(profile)
+    if normalized == 'mtls':
+        return [
+            '# [安全档位] 严格档：启用 TLS，并要求服务端证书校验（mTLS）。',
+            '# 注意：请把下方证书路径替换为真实文件路径，否则连接会失败。',
+            'tls_enable = true',
+            'tls_trusted_ca_file = /etc/frp/certs/ca.crt',
+            'tls_cert_file = /etc/frp/certs/client.crt',
+            'tls_key_file = /etc/frp/certs/client.key',
+        ]
+    if normalized == 'hybrid':
+        return [
+            '# [安全档位] 增强档：TLS + 代理层加密 + 压缩。',
+            '# 说明：在已开启 TLS 场景下再启 use_encryption 会增加 CPU 开销，适合高敏感流量。',
+            'tls_enable = true',
+        ]
+    return [
+        '# [安全档位] 推荐档：TLS + token。',
+        '# 说明：默认好用、性能与安全较均衡，适合大多数生产场景。',
+        'tls_enable = true',
+    ]
+
+
+def _build_security_proxy_lines(profile):
+    normalized = normalize_security_profile(profile)
+    if normalized == 'hybrid':
+        return [
+            'use_encryption = true',
+            'use_compression = true',
+        ]
+    return []
+
+
+def _build_proxy_section(port, security_profile='balanced'):
     lines = [
         f'[{_safe_proxy_name(port.get("name"))}]',
         f'type = {_value(port.get("protocol"))}',
@@ -51,17 +117,26 @@ def _build_proxy_section(port):
         lines.append(f'custom_domains = {_value(port.get("domain"))}')
     else:
         lines.append(f'remote_port = {_value(port.get("remote_port"))}')
+    lines.extend(_build_security_proxy_lines(security_profile))
     return lines
 
 
-def build_frpc_config(server, ports):
+def build_frpc_config(server, ports, security_profile='balanced'):
+    profile_summary = get_security_profile_summary(security_profile)
     lines = [
+        '# ----------------------------------------',
+        '# FRPC 自动生成配置',
+        f'# 加密方案: {profile_summary["label"]}',
+        '# ----------------------------------------',
         '[common]',
         f'server_addr = {_value(server.get("server_addr"))}',
         f'server_port = {_value(server.get("server_port"))}',
         f'token = {_value(server.get("token"))}',
-        '',
     ]
+    lines.extend(_build_security_common_lines(profile_summary['id']))
+    lines.extend([
+        '',
+    ])
 
     used_names = set()
     for port in ports:
@@ -78,7 +153,7 @@ def build_frpc_config(server, ports):
             section_name = port['name']
         used_names.add(section_name)
 
-        lines.extend(_build_proxy_section(port))
+        lines.extend(_build_proxy_section(port, security_profile=profile_summary['id']))
         lines.append('')
 
     return '\n'.join(lines).rstrip() + '\n'
@@ -205,7 +280,7 @@ if command -v pgrep >/dev/null 2>&1 && pgrep -x frps >/dev/null 2>&1; then
     fi
 fi
 
-cat > frps.ini << EOF
+cat > frps.ini << 'EOF'
 [common]
 bind_port = {_value(server.get('server_port'))}
 vhost_http_port = {_value(server.get('vhost_http_port'))}
@@ -236,16 +311,9 @@ echo "密码: {_value(server.get('dashboard_pwd'))}"
 """
 
 
-def build_frpc_deploy_command(server, port, system='linux'):
-    config_lines = [
-        '[common]',
-        f'server_addr = {_value(server.get("server_addr"))}',
-        f'server_port = {_value(server.get("server_port"))}',
-        f'token = {_value(server.get("token"))}',
-        '',
-    ]
-    config_lines.extend(_build_proxy_section(port))
-    config = '\n'.join(config_lines)
+def build_frpc_deploy_command(server, port, system='linux', security_profile='balanced'):
+    profile_summary = get_security_profile_summary(security_profile)
+    config = build_frpc_config(server, [port], security_profile=profile_summary['id'])
     protocol = _value(port.get('protocol')).lower()
 
     if system == 'windows':
@@ -264,6 +332,7 @@ def build_frpc_deploy_command(server, port, system='linux'):
             )
         return f"""@echo off
 echo FRPC Windows 一键部署脚本
+echo 安全档位: {profile_summary['label']}
 echo.
 
 if not exist "frp" mkdir frp
@@ -302,6 +371,8 @@ pause
 wget -O frpc.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME}
 tar -xzf frpc.tar.gz
 cd {LINUX_FOLDER_NAME}
+
+echo "使用安全档位: {profile_summary['label']}"
 
 cat > frpc.ini << 'EOF'
 {config}

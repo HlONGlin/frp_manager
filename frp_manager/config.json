@@ -10,5 +10,15 @@
         "allow_ports": "2000-30000"
     },
     "frpc_configs": [],
-    "frps_servers": []
+    "frps_servers": [],
+    "agent": {
+        "nodes": [],
+        "jobs": [],
+        "runtimes": []
+    },
+    "auth": {
+        "initialized": false,
+        "admin_username": "",
+        "password_hash": ""
+    }
 }

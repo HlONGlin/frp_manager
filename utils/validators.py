@@ -197,6 +197,7 @@ def validate_port_create(payload):
     _ensure_known_fields(payload, PORT_FIELDS)
 
     protocol = _as_text(payload.get('protocol'), 'protocol', default='tcp')
+    protocol = protocol or 'tcp'
     protocol = protocol.lower()
     if protocol not in PROTOCOLS:
         raise ValidationError('协议仅支持 tcp、udp、http、https')
@@ -234,3 +235,23 @@ def validate_system(system):
     if normalized not in {'linux', 'windows'}:
         raise ValidationError('系统类型仅支持 linux 或 windows')
     return normalized
+
+
+def validate_security_profile(profile):
+    if not profile:
+        return 'balanced'
+    normalized = str(profile).strip().lower()
+    aliases = {
+        'default': 'balanced',
+        'recommended': 'balanced',
+        'tls': 'balanced',
+        'balanced': 'balanced',
+        'hybrid': 'hybrid',
+        'double': 'hybrid',
+        'strict': 'mtls',
+        'mtls': 'mtls',
+    }
+    resolved = aliases.get(normalized)
+    if not resolved:
+        raise ValidationError('加密方案仅支持 balanced、hybrid、mtls')
+    return resolved
