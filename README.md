@@ -82,7 +82,9 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 
 在端口映射中可为 Linux/Windows 生成 FRPC 一键部署命令。
 
-- Windows 脚本已兼容批处理回显问题（`(@echo off ... ) > frpc.ini`）。
+- Linux/Windows 均生成单段命令，可直接整段复制执行。
+- Linux 命令通过 Base64 写入 `frpc.ini`，避免多行 heredoc 粘贴失败。
+- Windows 命令使用 PowerShell 单段执行（含下载、解压、写配置、后台启动）。
 - Token 与 FRPS 保持一致，避免手工复制错误导致的 token 不匹配。
 
 ### FRPC 链路加密方案（新）

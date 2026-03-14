@@ -1,3 +1,4 @@
+import base64
 import os
 import re
 
@@ -406,71 +407,45 @@ echo "密码: {_value(server.get('dashboard_pwd'))}"
 def build_frpc_deploy_command(server, port, system='linux', security_profile='balanced'):
     profile_summary = get_security_profile_summary(security_profile)
     config = build_frpc_config(server, [port], security_profile=profile_summary['id'])
+    config_b64 = base64.b64encode(config.encode('utf-8')).decode('ascii')
     protocol = _value(port.get('protocol')).lower()
 
     if system == 'windows':
-        windows_echo_lines = []
-        for line in config.splitlines():
-            if line:
-                windows_echo_lines.append(f"echo {_escape_for_batch_echo(line)}")
-        windows_echo_config = '\n'.join(windows_echo_lines)
-
         if protocol in {'http', 'https'}:
-            target_line = f'echo 访问地址: http://{_value(port.get("domain"))}:{_value(server.get("vhost_http_port"))}'
+            target_line = f"Write-Host '访问地址: http://{_value(port.get('domain'))}:{_value(server.get('vhost_http_port'))}'"
         else:
             target_line = (
-                f'echo 映射地址: {_value(server.get("server_addr"))}:{_value(port.get("remote_port"))} '
-                f'^> {_value(port.get("local_ip"))}:{_value(port.get("local_port"))}'
+                "Write-Host '映射地址: "
+                f"{_value(server.get('server_addr'))}:{_value(port.get('remote_port'))} -> {_value(port.get('local_ip'))}:{_value(port.get('local_port'))}'"
             )
-        return f"""@echo off
-echo FRPC Windows 一键部署脚本
-echo 安全档位: {profile_summary['label']}
-echo.
-
-if not exist "frp" mkdir frp
-cd frp
-powershell -Command "Invoke-WebRequest -Uri '{BASE_DOWNLOAD_URL}/{WINDOWS_PACKAGE_NAME}' -OutFile 'frpc.zip'"
-powershell -Command "Expand-Archive -Path 'frpc.zip' -DestinationPath '.' -Force"
-cd {WINDOWS_FOLDER_NAME}
-
-(
-@echo off
-{windows_echo_config}
-) > frpc.ini
-
-start /b frpc.exe -c frpc.ini
-echo.
-echo FRPC 部署完成！
-{target_line}
-pause
-"""
+        ps_script = (
+            "$ErrorActionPreference='Stop'; "
+            "New-Item -ItemType Directory -Force 'frp' | Out-Null; "
+            "Set-Location 'frp'; "
+            f"Invoke-WebRequest -Uri '{BASE_DOWNLOAD_URL}/{WINDOWS_PACKAGE_NAME}' -OutFile 'frpc.zip'; "
+            "Expand-Archive -Path 'frpc.zip' -DestinationPath '.' -Force; "
+            f"Set-Location '{WINDOWS_FOLDER_NAME}'; "
+            f"[System.IO.File]::WriteAllText('frpc.ini',[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{config_b64}'))); "
+            "Start-Process -WindowStyle Hidden -FilePath '.\\frpc.exe' -ArgumentList '-c frpc.ini'; "
+            f"Write-Host 'FRPC 部署完成！ 安全档位: {profile_summary['label']}'; "
+            f"{target_line}"
+        )
+        return f"powershell -NoProfile -ExecutionPolicy Bypass -Command \"{ps_script}\""
 
     if protocol in {'http', 'https'}:
-        target_lines = [
-            'echo "FRPC 部署完成！"',
-            f'echo "访问地址: http://{_value(port.get("domain"))}:{_value(server.get("vhost_http_port"))}"',
-        ]
+        target_line = f'echo "访问地址: http://{_value(port.get("domain"))}:{_value(server.get("vhost_http_port"))}"'
     else:
-        target_lines = [
-            'echo "FRPC 部署完成！"',
-            (
-                f'echo "映射地址: {_value(server.get("server_addr"))}:{_value(port.get("remote_port"))} '
-                f'-> {_value(port.get("local_ip"))}:{_value(port.get("local_port"))}"'
-            ),
-        ]
+        target_line = (
+            f'echo "映射地址: {_value(server.get("server_addr"))}:{_value(port.get("remote_port"))} '
+            f'-> {_value(port.get("local_ip"))}:{_value(port.get("local_port"))}"'
+        )
 
-    return f"""mkdir -p /opt/frp && cd /opt/frp
-wget -O frpc.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME}
-tar -xzf frpc.tar.gz
-cd {LINUX_FOLDER_NAME}
-
-echo "使用安全档位: {profile_summary['label']}"
-
-cat > frpc.ini << 'EOF'
-{config}
-EOF
-
-nohup ./frpc -c frpc.ini >/dev/null 2>&1 &
-{target_lines[0]}
-{target_lines[1]}
-"""
+    return (
+        "mkdir -p /opt/frp && cd /opt/frp && "
+        f"wget -O frpc.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME} && "
+        "tar -xzf frpc.tar.gz && "
+        f"cd {LINUX_FOLDER_NAME} && "
+        f"printf %s {_shell_single_quote(config_b64)} | base64 -d > frpc.ini && "
+        "nohup ./frpc -c frpc.ini >/dev/null 2>&1 & "
+        f"&& echo \"FRPC 部署完成！ 安全档位: {profile_summary['label']}\" && {target_line}"
+    )
