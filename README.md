@@ -38,21 +38,29 @@ frp_manager/
 curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.sh | sudo bash
 ```
 
+说明：
+- 在 `curl | bash` 这类非交互场景下，控制器会自动执行 `install`（可用 `NONINTERACTIVE_DEFAULT_ACTION` 覆盖）。
+- 也可显式传入 action：`curl -fsSL .../control.sh | sudo bash -s -- status`。
+
 控制器菜单支持：
 
 1. 安装或更新
 2. 卸载服务并删除文件
-3. 重启服务
-4. 停止服务
-5. 查看服务状态与访问地址
-6. 修改面板端口
-7. 仅显示访问地址
-8. 查看最近日志
-9. 重置管理员账号（重新初始化）
-10. Agent 编排控制
-11. 备份配置（`config.env` + `frp_manager/config.json`）
-12. 恢复配置（从备份包恢复）
-13. 查看最新备份详情（时间、大小、包含文件）
+3. 启动服务
+4. 重启服务
+5. 停止服务
+6. 查看服务状态与访问地址
+7. 修改面板端口
+8. 仅显示访问地址
+9. 查看最近日志
+10. 重置管理员账号（重新初始化）
+11. 运行健康检查
+12. 备份配置（`config.env` + `frp_manager/config.json`）
+13. 恢复配置（从备份包恢复）
+14. 查看最新备份详情（时间、大小、包含文件）
+
+命令行 action（适合自动化）：
+- `bash control.sh install|update|start|restart|stop|status|urls|logs|health|backup|backup-info|reset-admin`
 
 更新策略说明：
 - 每次在控制器执行“1) 安装或更新”时，会同步 GitHub 最新仓库内容。

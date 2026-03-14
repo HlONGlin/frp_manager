@@ -32,6 +32,7 @@ BOOTSTRAP_DIR="${BOOTSTRAP_DIR:-/opt/frp-manager}"
 BOOTSTRAP_FORCE_UPDATE="${BOOTSTRAP_FORCE_UPDATE:-0}"
 KEEP_LOCAL_DB_ON_UPDATE="${KEEP_LOCAL_DB_ON_UPDATE:-0}"
 AGENT_MENU_ENABLED="${AGENT_MENU_ENABLED:-0}"
+NONINTERACTIVE_DEFAULT_ACTION="${NONINTERACTIVE_DEFAULT_ACTION:-install}"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -329,12 +330,14 @@ service_exists() {
 }
 
 project_status_text() {
+  local service_rc=0
   if service_is_running; then
     echo "运行中"
     return
   fi
+  service_rc=$?
 
-  if [[ "$?" -ne 1 ]]; then
+  if [[ "$service_rc" -ne 1 ]]; then
     echo "未知"
     return
   fi
@@ -769,6 +772,10 @@ prompt_choice() {
   printf -v "$__var_name" '%s' "$input"
 }
 
+is_interactive_terminal() {
+  [[ -t 0 && -t 1 ]]
+}
+
 require_deployed_env() {
   if is_bootstrap_mode; then
     warn "当前为引导模式，请先执行 1) 部署环境。"
@@ -838,6 +845,110 @@ do_start() {
     warn "启动命令已执行，但服务未处于运行状态，请查看日志。"
   fi
   show_access_urls
+}
+
+run_cli_action() {
+  local action="${1:-}"
+  case "$action" in
+    install|update)
+      do_install
+      ;;
+    uninstall)
+      do_uninstall
+      ;;
+    start)
+      if require_deployed_env; then
+        do_start
+      fi
+      ;;
+    restart)
+      if require_deployed_env; then
+        do_restart
+      fi
+      ;;
+    stop)
+      if require_deployed_env; then
+        do_stop
+      fi
+      ;;
+    status)
+      if require_deployed_env; then
+        do_status
+      fi
+      ;;
+    port)
+      if require_deployed_env; then
+        do_change_port
+      fi
+      ;;
+    urls)
+      if require_deployed_env; then
+        show_access_urls
+      fi
+      ;;
+    logs)
+      if require_deployed_env; then
+        show_logs
+      fi
+      ;;
+    reset-admin)
+      if require_deployed_env; then
+        reset_admin_credentials
+      fi
+      ;;
+    health)
+      run_health_check
+      ;;
+    backup)
+      if require_deployed_env; then
+        backup_config_files
+      fi
+      ;;
+    restore)
+      if require_deployed_env; then
+        restore_config_files
+      fi
+      ;;
+    backup-info)
+      if require_deployed_env; then
+        show_latest_backup_details
+      fi
+      ;;
+    agent)
+      if [[ "$AGENT_MENU_ENABLED" == "1" ]]; then
+        do_agent_control
+      else
+        warn "当前已禁用 Agent 菜单（设置 AGENT_MENU_ENABLED=1 可启用）。"
+      fi
+      ;;
+    help|-h|--help)
+      cat <<'EOF'
+用法：bash control.sh [action]
+
+可用 action：
+  install|update   安装或更新
+  uninstall        彻底卸载
+  start            启动服务
+  restart          重启服务
+  stop             停止服务
+  status           查看状态与地址
+  port             修改面板端口（交互）
+  urls             仅显示访问地址
+  logs             查看最近日志
+  reset-admin      重置管理员账号
+  health           运行健康检查
+  backup           备份配置
+  restore          恢复配置（交互）
+  backup-info      查看最新备份详情
+  agent            Agent 高级菜单（需 AGENT_MENU_ENABLED=1）
+EOF
+      ;;
+    *)
+      warn "未知 action: $action"
+      run_cli_action help
+      return 1
+      ;;
+  esac
 }
 
 do_restart() {
@@ -1297,6 +1408,17 @@ main() {
   if is_bootstrap_mode && is_repo_ready "$BOOTSTRAP_DIR"; then
     log "检测到已部署仓库，切换到本地控制器：$BOOTSTRAP_DIR/control.sh"
     exec bash "$BOOTSTRAP_DIR/control.sh" "$@"
+  fi
+
+  if [[ "$#" -gt 0 ]]; then
+    run_cli_action "$1"
+    return
+  fi
+
+  if ! is_interactive_terminal; then
+    log "检测到非交互终端，自动执行：${NONINTERACTIVE_DEFAULT_ACTION}"
+    run_cli_action "$NONINTERACTIVE_DEFAULT_ACTION"
+    return
   fi
 
   while true; do
