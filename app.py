@@ -761,6 +761,8 @@ def apply_security_headers(response):
     if app.config.get('SESSION_COOKIE_SECURE'):
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
 
+    response.headers.pop('WWW-Authenticate', None)
+
     return response
 
 
@@ -806,11 +808,11 @@ def login_page():
     auth = get_auth_config()
 
     if not username or not password:
-        return render_template('login.html', error='请输入账号和密码', username=username), 422
+        return render_template('login.html', error='请输入账号和密码', username=username)
     if username != str(auth.get('admin_username', '')).strip():
-        return render_template('login.html', error='账号或密码错误', username=username), 401
+        return render_template('login.html', error='账号或密码错误', username=username)
     if not check_password_hash(str(auth.get('password_hash', '')), password):
-        return render_template('login.html', error='账号或密码错误', username=username), 401
+        return render_template('login.html', error='账号或密码错误', username=username)
 
     session.clear()
     session.permanent = True
