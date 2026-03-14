@@ -428,8 +428,10 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
             "Expand-Archive -Path 'frpc.zip' -DestinationPath '.' -Force; "
             f"Set-Location '{WINDOWS_FOLDER_NAME}'; "
             f"[System.IO.File]::WriteAllText('{config_name}',[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{config_b64}'))); "
-            f"Start-Process -WindowStyle Hidden -FilePath '.\\frpc.exe' -ArgumentList '-c {config_name}'; "
-            f"Write-Host 'FRPC 部署完成！ 安全档位: {profile_summary['label']}'; "
+            f"$p=Start-Process -WindowStyle Hidden -FilePath '.\\frpc.exe' -ArgumentList '-c {config_name}' -PassThru; "
+            "$p.Refresh(); Start-Sleep -Seconds 2; $p.Refresh(); "
+            "if ($p.HasExited) { throw 'FRPC 进程未正常启动，请检查配置、密钥或网络连通性。' }; "
+            f"Write-Host 'FRPC 已启动！ 安全档位: {profile_summary['label']}'; "
             f"{target_line}"
         )
         return ps_script
@@ -448,8 +450,10 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
         "tar -xzf frpc.tar.gz && "
         f"cd {LINUX_FOLDER_NAME} && "
         f"printf %s {_shell_single_quote(config_b64)} | base64 -d > {config_name} && "
-        f"nohup ./frpc -c {config_name} >/dev/null 2>&1 & "
-        f"&& echo \"FRPC 部署完成！ 安全档位: {profile_summary['label']}\" && {target_line}"
+        f"nohup ./frpc -c {config_name} >/dev/null 2>&1 & sleep 1 && "
+        f"pgrep -f {_shell_single_quote(f'frpc -c {config_name}')} >/dev/null && "
+        f"echo \"FRPC 已启动！ 安全档位: {profile_summary['label']}\" && {target_line} || "
+        "(echo \"FRPC 进程未正常启动，请检查配置、密钥或网络连通性。\" >&2; exit 1)"
     )
 
 

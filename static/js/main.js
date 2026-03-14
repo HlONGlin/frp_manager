@@ -887,12 +887,29 @@ async function togglePort(serverId, portId) {
 }
 
 async function checkPort(serverId, portId) {
-    const data = await apiRequest(`/api/frps/server/${serverId}/port/${portId}/check`, { method: 'POST' });
-    if (data.ok) {
-        showToast(data.message || '检测通过', 'success');
+    const server = findServer(serverId);
+    const port = server ? findPort(server, portId) : null;
+    if (!server || !port) {
+        showToast('规则不存在，已刷新列表', 'warning');
+        await loadServers(false);
         return;
     }
-    showToast(data.message || '检测未通过', 'warning');
+
+    try {
+        const data = await apiRequest(`/api/frps/server/${serverId}/port/${portId}/check`, { method: 'POST' });
+        if (data.ok) {
+            showToast(data.message || '检测通过', 'success');
+            return;
+        }
+        showToast(data.message || '检测未通过', 'warning');
+    } catch (error) {
+        const message = String(error?.message || '').trim();
+        if (message.includes('请求的资源不存在')) {
+            showToast('当前后端版本不支持“规则检测”，请先执行控制器“安装或更新”后重试', 'warning');
+            return;
+        }
+        showToast(message || '检测失败', 'error');
+    }
 }
 
 async function deletePort(serverId, portId) {
