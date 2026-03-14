@@ -107,6 +107,58 @@ create_temp_file() {
   echo "$tmp_file"
 }
 
+preserve_admin_auth_from_backup() {
+  local old_config="$1"
+  local new_config="$2"
+  local py=""
+
+  if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
+    py="$APP_DIR/.venv/bin/python"
+  elif has_cmd python3; then
+    py="python3"
+  elif has_cmd python; then
+    py="python"
+  fi
+
+  if [[ -z "$py" ]]; then
+    warn "未检测到 Python，无法自动保留管理员账号配置。"
+    return 0
+  fi
+
+  "$py" - "$old_config" "$new_config" <<'PY'
+import json
+import sys
+
+old_path, new_path = sys.argv[1], sys.argv[2]
+
+try:
+    with open(old_path, 'r', encoding='utf-8') as f:
+        old_data = json.load(f)
+except Exception:
+    old_data = {}
+
+try:
+    with open(new_path, 'r', encoding='utf-8') as f:
+        new_data = json.load(f)
+except Exception:
+    new_data = {}
+
+old_auth = old_data.get('auth') if isinstance(old_data, dict) else None
+if isinstance(old_auth, dict):
+    initialized = bool(old_auth.get('initialized'))
+    admin_username = str(old_auth.get('admin_username', '')).strip()
+    password_hash = str(old_auth.get('password_hash', '')).strip()
+    if initialized and admin_username and password_hash and isinstance(new_data, dict):
+        new_data['auth'] = {
+            'initialized': True,
+            'admin_username': admin_username,
+            'password_hash': password_hash,
+        }
+        with open(new_path, 'w', encoding='utf-8') as f:
+            json.dump(new_data, f, ensure_ascii=False, indent=4)
+PY
+}
+
 sync_repo_to_origin() {
   local repo_dir="$1"
   local backup_env=""
@@ -221,6 +273,7 @@ is_bootstrap_mode() {
 sync_repo_to_bootstrap_dir() {
   require_root
   ensure_git
+  local migrated_backup_dir=""
 
   log "引导模式：使用仓库目录 $BOOTSTRAP_DIR"
   log "正在同步仓库到 $BOOTSTRAP_DIR（分支：$BRANCH）"
@@ -250,9 +303,27 @@ sync_repo_to_bootstrap_dir() {
     fi
   else
     if [[ -e "$BOOTSTRAP_DIR" ]] && [[ -n "$(ls -A "$BOOTSTRAP_DIR" 2>/dev/null || true)" ]]; then
-      die "引导目标目录非空：$BOOTSTRAP_DIR"
+      migrated_backup_dir="${BOOTSTRAP_DIR}.bak.$(date '+%Y%m%d_%H%M%S')"
+      warn "检测到引导目录非空，自动备份到：$migrated_backup_dir"
+      mv "$BOOTSTRAP_DIR" "$migrated_backup_dir" || die "备份现有引导目录失败：$BOOTSTRAP_DIR"
+      mkdir -p "$BOOTSTRAP_DIR"
     fi
     git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$BOOTSTRAP_DIR" || die "仓库克隆失败，请检查网络或仓库地址。"
+
+    if [[ -n "$migrated_backup_dir" && -d "$migrated_backup_dir" ]]; then
+      if [[ -f "$migrated_backup_dir/config.env" ]]; then
+        cp -f "$migrated_backup_dir/config.env" "$BOOTSTRAP_DIR/config.env"
+      fi
+
+      if [[ -f "$migrated_backup_dir/frp_manager/config.json" && -f "$BOOTSTRAP_DIR/frp_manager/config.json" ]]; then
+        if [[ "$KEEP_LOCAL_DB_ON_UPDATE" == "1" ]]; then
+          cp -f "$migrated_backup_dir/frp_manager/config.json" "$BOOTSTRAP_DIR/frp_manager/config.json"
+        else
+          preserve_admin_auth_from_backup "$migrated_backup_dir/frp_manager/config.json" "$BOOTSTRAP_DIR/frp_manager/config.json"
+        fi
+      fi
+      warn "已保留旧目录备份：$migrated_backup_dir"
+    fi
   fi
 
   chmod +x "$BOOTSTRAP_DIR/control.sh" "$BOOTSTRAP_DIR/install.sh" "$BOOTSTRAP_DIR/uninstall.sh" || true
