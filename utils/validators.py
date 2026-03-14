@@ -29,6 +29,11 @@ PORT_FIELDS = {
     'protocol',
     'domain',
     'enabled',
+    'last_check_ok',
+    'last_check_message',
+    'last_check_protocol',
+    'last_check_target',
+    'last_check_at',
 }
 
 NAME_PATTERN = re.compile(r'^[^\r\n]{1,64}$')
@@ -56,6 +61,11 @@ FIELD_LABELS = {
     'protocol': '协议',
     'domain': '域名',
     'enabled': '启用状态',
+    'last_check_ok': '最近检测是否通过',
+    'last_check_message': '最近检测信息',
+    'last_check_protocol': '最近检测协议',
+    'last_check_target': '最近检测目标',
+    'last_check_at': '最近检测时间',
 }
 
 
