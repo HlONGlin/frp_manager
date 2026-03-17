@@ -361,7 +361,7 @@ if command -v pgrep >/dev/null 2>&1 && pgrep -x frps >/dev/null 2>&1; then
     fi
 fi
 
-cat > frps.ini << 'EOF'
+cat > frps.ini << EOF
 [common]
 bind_port = $ACTUAL_SERVER_PORT
 vhost_http_port = $ACTUAL_HTTP_PORT
