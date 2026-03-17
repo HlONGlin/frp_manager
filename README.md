@@ -71,6 +71,10 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 - 默认会用 GitHub 最新 `frp_manager/config.json` 覆盖本地数据库。
 - 如需保留本地数据库，可在运行前设置环境变量：`KEEP_LOCAL_DB_ON_UPDATE=1`。
 
+故障规避建议：
+- 若健康检查显示“服务未运行但端口已占用”，表示端口被其他进程占用（常见如 `rclone`）；先释放端口或在菜单 7 修改端口。
+- FRPS 部署脚本已增加配置占位符自检，若出现 `frps.ini` 里仍有 `$ACTUAL_*`/`$FRPS_TOKEN` 会直接失败并打印配置片段，避免假成功。
+
 ## FRPS 一键部署（链接模式）
 
 在面板中新增 FRPS 服务器后，会返回：

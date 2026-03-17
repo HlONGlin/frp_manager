@@ -506,6 +506,17 @@ sys.exit(0)
 PY
 }
 
+show_port_occupier() {
+  local port="$1"
+  if has_cmd ss; then
+    ss -lntp 2>/dev/null | grep -E ":${port}[[:space:]]" || true
+    return
+  fi
+  if has_cmd lsof; then
+    lsof -i ":${port}" -n -P 2>/dev/null || true
+  fi
+}
+
 detect_local_ip() {
   local ip=""
   if has_cmd ip; then
@@ -710,6 +721,11 @@ PY
     warn "端口检测：$port 当前未被占用（服务可能未监听）"
   else
     echo "端口检测：$port 已占用（符合服务监听预期）"
+    if ! service_is_running; then
+      warn "当前服务未运行，但端口 $port 被其他进程占用："
+      show_port_occupier "$port"
+      warn "如需修复：先停止占用进程，或在菜单 7 修改面板端口。"
+    fi
   fi
 
   show_access_urls

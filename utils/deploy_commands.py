@@ -374,6 +374,13 @@ token = $FRPS_TOKEN
 allow_ports = 2000-30000
 EOF
 
+if grep -qE '[$]ACTUAL_|[$]FRPS_TOKEN|[$]CONFIG_' frps.ini; then
+    echo "FRPS 配置生成失败：frps.ini 中存在未展开变量占位符。"
+    echo "请检查部署脚本版本与模板内容。"
+    sed -n '1,80p' frps.ini || true
+    exit 1
+fi
+
 nohup ./frps -c frps.ini >/tmp/frps.log 2>&1 &
 sleep 2
 
