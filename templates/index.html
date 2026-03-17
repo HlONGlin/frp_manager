@@ -20,6 +20,10 @@
                         <span class="tab-icon">🖥️</span>
                         服务端
                     </button>
+                    <button type="button" class="nav-tab" data-tab="linked">
+                        <span class="tab-icon">🔗</span>
+                        联动控制
+                    </button>
                     <button type="button" class="nav-tab" data-tab="terminal">
                         <span class="tab-icon">⌨️</span>
                         控制台
@@ -49,6 +53,54 @@
                         <p>暂无服务端</p>
                         <p class="hint">点击“添加服务端”开始配置</p>
                     </div>
+                </div>
+            </section>
+
+            <section id="linked-panel" class="tab-panel">
+                <div class="panel-header">
+                    <h2>服务端 / 客户端联动列表</h2>
+                    <div class="linked-header-actions">
+                        <span class="linked-live-status" id="linked-live-status">实时：连接中</span>
+                        <button type="button" class="btn btn-secondary" id="linked-refresh-all">刷新联动状态</button>
+                    </div>
+                </div>
+                <div class="linked-grid">
+                    <div class="linked-column">
+                        <h3>服务端列表（限制操作）</h3>
+                        <div class="linked-list" id="linked-servers-list">
+                            <div class="empty-state">
+                                <span class="empty-icon">🖥️</span>
+                                <p>暂无服务端</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="linked-column">
+                        <h3>客户端列表（来自转发规则）</h3>
+                        <div class="linked-list" id="linked-clients-list">
+                            <div class="empty-state">
+                                <span class="empty-icon">📡</span>
+                                <p>暂无客户端规则</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="linked-log" id="linked-action-log">
+                    <div class="linked-log-toolbar">
+                        <div class="linked-log-title">联动操作记录</div>
+                        <div class="linked-log-controls">
+                            <select id="linked-log-filter">
+                                <option value="">全部服务端</option>
+                            </select>
+                            <button type="button" class="btn btn-xs btn-outline" id="linked-log-clear">清空记录</button>
+                        </div>
+                    </div>
+                    <div class="linked-progress" id="linked-progress" style="display:none;">
+                        <div class="linked-progress-meta" id="linked-progress-meta">批量处理中 0/0</div>
+                        <div class="linked-progress-track">
+                            <div class="linked-progress-fill" id="linked-progress-fill" style="width:0%;"></div>
+                        </div>
+                    </div>
+                    <div class="linked-log-empty">暂无记录</div>
                 </div>
             </section>
 

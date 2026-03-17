@@ -1,7 +1,8 @@
-from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, stream_with_context, url_for
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 import os
+import json
 import re
 import secrets
 import socket
@@ -798,6 +799,76 @@ def build_linked_frpc_runtime_metadata(port):
     }
 
 
+def build_linked_overview_payload(servers):
+    linked_servers = []
+    linked_clients = []
+    for server in servers:
+        server_id = str(server.get('id', '')).strip()
+        ports = server.get('ports', [])
+        if not isinstance(ports, list):
+            ports = []
+
+        enabled_count = 0
+        for port in ports:
+            if bool(port.get('enabled', True)):
+                enabled_count += 1
+
+            linked_clients.append(
+                {
+                    'id': str(port.get('id', '')).strip(),
+                    'server_id': server_id,
+                    'server_name': str(server.get('name', '')).strip(),
+                    'name': str(port.get('name', '')).strip(),
+                    'protocol': str(port.get('protocol', '')).strip().lower() or 'tcp',
+                    'enabled': bool(port.get('enabled', True)),
+                    'local_ip': str(port.get('local_ip', '')).strip(),
+                    'local_port': port.get('local_port'),
+                    'remote_port': port.get('remote_port'),
+                    'domain': str(port.get('domain', '')).strip(),
+                    'last_check_ok': bool(port.get('last_check_ok', False)),
+                    'last_check_message': str(port.get('last_check_message', '')).strip(),
+                    'last_check_at': str(port.get('last_check_at', '')).strip(),
+                }
+            )
+
+        linked_servers.append(
+            {
+                'id': server_id,
+                'name': str(server.get('name', '')).strip(),
+                'status': str(server.get('status', '')).strip() or 'unknown',
+                'server_addr': str(server.get('server_addr', '')).strip(),
+                'server_port': server.get('server_port'),
+                'ports_total': len(ports),
+                'ports_enabled': enabled_count,
+            }
+        )
+
+    return {
+        'servers': linked_servers,
+        'clients': linked_clients,
+    }
+
+
+def get_linked_overview_snapshot(refresh=False):
+    servers = get_frps_servers()
+    attach_server_statuses(servers, refresh=bool(refresh))
+    return build_linked_overview_payload(servers)
+
+
+def unpack_route_result(result):
+    if isinstance(result, tuple) and len(result) >= 2:
+        return result[0], int(result[1])
+    return result, 200
+
+
+def response_json_payload(response_obj):
+    if hasattr(response_obj, 'get_json'):
+        payload = response_obj.get_json(silent=True)
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
 def build_frpc_cleanup_command(port, system='linux'):
     normalized_system = validate_system(system)
     config_name = build_frpc_config_file_name(port)
@@ -807,8 +878,7 @@ def build_frpc_cleanup_command(port, system='linux'):
             'powershell -NoProfile -ExecutionPolicy Bypass -Command '
             f'"$cfg={shell_single_quote(config_name)}; '
             f'$root=Join-Path (Resolve-Path .) {shell_single_quote(windows_root)}; '
-            '$procs=Get-CimInstance Win32_Process -Filter \"Name=\'frpc.exe\'\"; '
-            '$targets=$procs | Where-Object { $_.CommandLine -like (\"*\" + $cfg + \"*\") }; '
+            "$targets=Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'frpc.exe' -and $_.CommandLine -like ('*' + $cfg + '*') }; "
             'foreach($p in $targets){ Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }; '
             'if (Test-Path $root) { Remove-Item -Path (Join-Path $root $cfg) -Force -ErrorAction SilentlyContinue }; '
             'Write-Host \"客户端残留已清理（按配置文件）\""'
@@ -1525,6 +1595,147 @@ def delete_frpc(config_id):
     if not deleted:
         return error_response('客户端配置不存在', 404)
     return success_response()
+
+
+@app.route('/api/linked/overview', methods=['GET'])
+def linked_overview():
+    refresh = request.args.get('refresh', '0').lower() in {'1', 'true', 'yes'}
+    return success_response(get_linked_overview_snapshot(refresh=refresh))
+
+
+@app.route('/api/linked/stream', methods=['GET'])
+def linked_stream():
+    interval = 3.0
+
+    def stream_events():
+        previous_payload = ''
+        while True:
+            payload_obj = get_linked_overview_snapshot(refresh=False)
+            payload = json.dumps(payload_obj, ensure_ascii=False, separators=(',', ':'))
+            if payload != previous_payload:
+                yield f'event: overview\ndata: {payload}\n\n'
+                previous_payload = payload
+            else:
+                yield 'event: heartbeat\ndata: {}\n\n'
+            time.sleep(interval)
+
+    response = Response(stream_with_context(stream_events()), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
+
+
+@app.route('/api/linked/server/<server_id>/shutdown', methods=['POST'])
+def linked_shutdown_server(server_id):
+    server = get_frps_server(server_id)
+    if not server:
+        return error_response('服务器不存在', 404)
+
+    ports = server.get('ports', [])
+    if not isinstance(ports, list):
+        ports = []
+
+    changed = 0
+    for port in ports:
+        if not bool(port.get('enabled', True)):
+            continue
+        port_id = str(port.get('id', '')).strip()
+        if not port_id:
+            continue
+        if update_port_mapping(server_id, port_id, {'enabled': False}):
+            changed += 1
+
+    clear_cached_status(server_id)
+    return success_response({'updated_ports': changed, 'message': '服务端关联规则已一键关闭'})
+
+
+@app.route('/api/linked/server/<server_id>/check', methods=['POST'])
+def linked_check_server(server_id):
+    return check_frps(server_id)
+
+
+@app.route('/api/linked/server/<server_id>/clients/check', methods=['POST'])
+def linked_check_server_clients(server_id):
+    server = get_frps_server(server_id)
+    if not server:
+        return error_response('服务器不存在', 404)
+
+    ports = server.get('ports', [])
+    if not isinstance(ports, list):
+        ports = []
+
+    results = []
+    ok_count = 0
+    for port in ports:
+        port_id = str(port.get('id', '')).strip()
+        if not port_id:
+            continue
+
+        response_obj, status_code = unpack_route_result(check_port_mapping(server_id, port_id))
+        payload = response_json_payload(response_obj)
+        ok = bool(payload.get('ok', False)) if status_code < 400 else False
+        if ok:
+            ok_count += 1
+
+        results.append(
+            {
+                'port_id': port_id,
+                'name': str(port.get('name', '')).strip(),
+                'ok': ok,
+                'message': str(payload.get('message', '')).strip() or ('检测失败' if status_code >= 400 else ''),
+                'status_code': status_code,
+            }
+        )
+
+    return success_response(
+        {
+            'server_id': server_id,
+            'total': len(results),
+            'ok_count': ok_count,
+            'fail_count': max(len(results) - ok_count, 0),
+            'results': results,
+        }
+    )
+
+
+@app.route('/api/linked/server/<server_id>/data', methods=['DELETE'])
+def linked_delete_server_data(server_id):
+    deleted = delete_frps_server(server_id)
+    if not deleted:
+        return error_response('服务器不存在', 404)
+    clear_cached_status(server_id)
+    return success_response({'message': '服务端数据已删除'})
+
+
+@app.route('/api/linked/client/<server_id>/<port_id>/shutdown', methods=['POST'])
+def linked_shutdown_client(server_id, port_id):
+    server = get_frps_server(server_id)
+    if not server:
+        return error_response('服务器不存在', 404)
+    port = find_port(server, port_id)
+    if not port:
+        return error_response('客户端规则不存在', 404)
+
+    if not bool(port.get('enabled', True)):
+        return success_response({'updated': False, 'message': '客户端规则已是关闭状态'})
+
+    updated = update_port_mapping(server_id, port_id, {'enabled': False})
+    if not updated:
+        return error_response('客户端规则不存在', 404)
+    return success_response({'updated': True, 'message': '客户端规则已关闭'})
+
+
+@app.route('/api/linked/client/<server_id>/<port_id>/data', methods=['DELETE'])
+def linked_delete_client_data(server_id, port_id):
+    deleted = delete_port_mapping(server_id, port_id)
+    if not deleted:
+        return error_response('客户端规则不存在', 404)
+    return success_response({'message': '客户端数据已删除'})
+
+
+@app.route('/api/linked/client/<server_id>/<port_id>/check', methods=['POST'])
+def linked_check_client(server_id, port_id):
+    return check_port_mapping(server_id, port_id)
 
 
 @app.route('/api/agent/nodes', methods=['GET'])
