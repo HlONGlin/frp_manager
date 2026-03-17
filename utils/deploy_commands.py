@@ -392,6 +392,21 @@ if grep -qiE "create server listener error|bind: address already in use" /tmp/fr
     exit 1
 fi
 
+if ! port_in_use "$ACTUAL_DASHBOARD_PORT"; then
+    echo "警告：仪表盘端口 $ACTUAL_DASHBOARD_PORT 当前未监听，请检查 /tmp/frps.log"
+else
+    echo "仪表盘端口监听正常：$ACTUAL_DASHBOARD_PORT"
+fi
+
+if command -v curl >/dev/null 2>&1; then
+    DASH_HTTP_CODE="$(curl -s -o /dev/null -w '%{{http_code}}' --max-time 2 "http://127.0.0.1:$ACTUAL_DASHBOARD_PORT/" || true)"
+    if [ "$DASH_HTTP_CODE" = "000" ]; then
+        echo "警告：本机无法访问仪表盘端口，请检查 FRPS 状态与日志。"
+    else
+        echo "仪表盘本机访问状态码：$DASH_HTTP_CODE"
+    fi
+fi
+
 echo "FRPS 部署完成！"
 echo "FRPS 服务器地址: $REPORTED_IP"
 echo "服务端口: $ACTUAL_SERVER_PORT"
@@ -400,6 +415,7 @@ echo "HTTPS 端口: $ACTUAL_HTTPS_PORT"
 echo "仪表盘地址: http://$REPORTED_IP:$ACTUAL_DASHBOARD_PORT"
 echo "用户名: {_value(server.get('dashboard_user'))}"
 echo "密码: {_value(server.get('dashboard_pwd'))}"
+echo "如外网无法访问仪表盘，请放行端口 $ACTUAL_DASHBOARD_PORT（云安全组 + 系统防火墙）。"
 {callback_echo_line}
 {callback_block}
 """
@@ -428,9 +444,15 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
             "Expand-Archive -Path 'frpc.zip' -DestinationPath '.' -Force; "
             f"Set-Location '{WINDOWS_FOLDER_NAME}'; "
             f"[System.IO.File]::WriteAllText('{config_name}',[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{config_b64}'))); "
-            f"$p=Start-Process -WindowStyle Hidden -FilePath '.\\frpc.exe' -ArgumentList '-c {config_name}' -PassThru; "
-            "$p.Refresh(); Start-Sleep -Seconds 2; $p.Refresh(); "
-            "if ($p.HasExited) { throw 'FRPC 进程未正常启动，请检查配置、密钥或网络连通性。' }; "
+            "$log='frpc-start.log'; "
+            f"$p=Start-Process -WindowStyle Hidden -FilePath '.\\frpc.exe' -ArgumentList '-c {config_name}' -RedirectStandardOutput $log -RedirectStandardError $log -PassThru; "
+            "$p.Refresh(); Start-Sleep -Seconds 3; $p.Refresh(); "
+            "if ($p.HasExited) { "
+            "Write-Host 'FRPC 启动日志（最近 40 行）：'; "
+            "if (Test-Path $log) { Get-Content $log -Tail 40 | ForEach-Object { Write-Host $_ } } "
+            "else { Write-Host '未找到启动日志文件。' }; "
+            "throw 'FRPC 进程未正常启动，请检查配置、密钥、网络连通性或本机防火墙。' "
+            "}; "
             f"Write-Host 'FRPC 已启动！ 安全档位: {profile_summary['label']}'; "
             f"{target_line}"
         )

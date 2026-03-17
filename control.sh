@@ -675,7 +675,7 @@ run_health_check() {
     if service_exists; then
       echo "服务文件：存在"
     else
-      warn "服务进程在运行，但未找到可解析的 unit 文件路径。"
+      echo "服务文件：未检测到固定路径（进程运行中）"
     fi
   else
     warn "服务状态：未运行"
