@@ -68,8 +68,8 @@ curl -fsSL https://raw.githubusercontent.com/HlONGlin/frp_manager/main/control.s
 
 更新策略说明：
 - 每次在控制器执行“1) 安装或更新”时，会同步 GitHub 最新仓库内容。
-- 默认会用 GitHub 最新 `frp_manager/config.json` 覆盖本地数据库。
-- 如需保留本地数据库，可在运行前设置环境变量：`KEEP_LOCAL_DB_ON_UPDATE=1`。
+- 默认保留本地 `frp_manager/config.json`（包含已保存的服务端/客户端配置）。
+- 如需强制用 GitHub 最新 `frp_manager/config.json` 覆盖本地数据库，可在运行前设置：`KEEP_LOCAL_DB_ON_UPDATE=0`。
 
 故障规避建议：
 - 若健康检查显示“服务未运行但端口已占用”，表示端口被其他进程占用（常见如 `rclone`）；先释放端口或在菜单 7 修改端口。

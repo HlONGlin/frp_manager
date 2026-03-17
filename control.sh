@@ -30,7 +30,7 @@ REPO_URL="${REPO_URL:-https://github.com/HlONGlin/frp_manager.git}"
 BRANCH="${BRANCH:-main}"
 BOOTSTRAP_DIR="${BOOTSTRAP_DIR:-/opt/frp-manager}"
 BOOTSTRAP_FORCE_UPDATE="${BOOTSTRAP_FORCE_UPDATE:-0}"
-KEEP_LOCAL_DB_ON_UPDATE="${KEEP_LOCAL_DB_ON_UPDATE:-0}"
+KEEP_LOCAL_DB_ON_UPDATE="${KEEP_LOCAL_DB_ON_UPDATE:-1}"
 AGENT_MENU_ENABLED="${AGENT_MENU_ENABLED:-0}"
 CONTROL_MENU_ONLY="${CONTROL_MENU_ONLY:-1}"
 
@@ -294,7 +294,7 @@ sync_repo_to_bootstrap_dir() {
       if [[ "$KEEP_LOCAL_DB_ON_UPDATE" == "1" ]]; then
         warn "检测到本地改动，已自动开启强制同步（保留 config.env 与 frp_manager/config.json）。"
       else
-        warn "检测到本地改动，已自动开启强制同步（保留 config.env，并以 GitHub 最新 config.json 覆盖本地数据库；管理员账号会自动保留）。"
+        warn "检测到本地改动，已自动开启强制同步（保留 config.env；本地数据库按当前策略处理，默认保留 frp_manager/config.json）。"
       fi
     fi
 
@@ -912,7 +912,7 @@ do_install() {
       if [[ "$KEEP_LOCAL_DB_ON_UPDATE" == "1" ]]; then
         warn "检测到本地改动，已自动开启强制同步（保留 config.env 与 frp_manager/config.json）。"
       else
-        warn "检测到本地改动，已自动开启强制同步（保留 config.env，并以 GitHub 最新 config.json 覆盖本地数据库；管理员账号会自动保留）。"
+        warn "检测到本地改动，已自动开启强制同步（保留 config.env；本地数据库按当前策略处理，默认保留 frp_manager/config.json）。"
       fi
     fi
 
