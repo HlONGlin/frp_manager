@@ -457,6 +457,8 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
             "$ErrorActionPreference='Stop'; "
             "New-Item -ItemType Directory -Force 'frp' | Out-Null; "
             "Set-Location 'frp'; "
+            "Get-Process frpc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; "
+            f"if (Test-Path '{WINDOWS_FOLDER_NAME}') {{ Remove-Item -Path '{WINDOWS_FOLDER_NAME}' -Recurse -Force -ErrorAction SilentlyContinue }}; "
             f"Invoke-WebRequest -Uri '{BASE_DOWNLOAD_URL}/{WINDOWS_PACKAGE_NAME}' -OutFile 'frpc.zip'; "
             "Expand-Archive -Path 'frpc.zip' -DestinationPath '.' -Force; "
             f"Set-Location '{WINDOWS_FOLDER_NAME}'; "
