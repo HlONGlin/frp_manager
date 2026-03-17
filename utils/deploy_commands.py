@@ -400,7 +400,12 @@ if grep -qiE "create server listener error|bind: address already in use" /tmp/fr
 fi
 
 if ! port_in_use "$ACTUAL_DASHBOARD_PORT"; then
-    echo "警告：仪表盘端口 $ACTUAL_DASHBOARD_PORT 当前未监听，请检查 /tmp/frps.log"
+    echo "FRPS 启动失败：仪表盘端口 $ACTUAL_DASHBOARD_PORT 未监听"
+    tail -n 80 /tmp/frps.log || true
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -x frps || true
+    fi
+    exit 1
 else
     echo "仪表盘端口监听正常：$ACTUAL_DASHBOARD_PORT"
 fi
@@ -408,7 +413,12 @@ fi
 if command -v curl >/dev/null 2>&1; then
     DASH_HTTP_CODE="$(curl -s -o /dev/null -w '%{{http_code}}' --max-time 2 "http://127.0.0.1:$ACTUAL_DASHBOARD_PORT/" || true)"
     if [ "$DASH_HTTP_CODE" = "000" ]; then
-        echo "警告：本机无法访问仪表盘端口，请检查 FRPS 状态与日志。"
+        echo "FRPS 启动失败：本机无法访问仪表盘端口 $ACTUAL_DASHBOARD_PORT"
+        tail -n 80 /tmp/frps.log || true
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -x frps || true
+        fi
+        exit 1
     else
         echo "仪表盘本机访问状态码：$DASH_HTTP_CODE"
     fi
