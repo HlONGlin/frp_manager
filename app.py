@@ -596,8 +596,8 @@ def build_frpc_one_click_command(script_urls, system='linux'):
             return (
                 'powershell -NoProfile -ExecutionPolicy Bypass -Command '
                 f'"$u={shell_single_quote(normalized_urls[0])}; '
-                '$u=$u + "&t=" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); '
-                'irm -UseBasicParsing -Headers @{ "Cache-Control"="no-cache"; "Pragma"="no-cache" } $u | iex"'
+                "$u=$u + '&t=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "
+                "irm -UseBasicParsing -Headers @{ 'Cache-Control'='no-cache'; 'Pragma'='no-cache' } $u | iex\""
             )
 
         ps_urls = ', '.join(shell_single_quote(url) for url in normalized_urls)
@@ -605,11 +605,11 @@ def build_frpc_one_click_command(script_urls, system='linux'):
             'powershell -NoProfile -ExecutionPolicy Bypass -Command '
             f'"$urls=@({ps_urls}); '
             'foreach($u in $urls){ '
-            'try { $u=$u + "&t=" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); '
-            'irm -UseBasicParsing -Headers @{ "Cache-Control"="no-cache"; "Pragma"="no-cache" } $u | iex; exit 0 } '
-            'catch { Write-Host (\"deploy url unreachable: \" + $u) } '
+            "try { $u=$u + '&t=' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); "
+            "irm -UseBasicParsing -Headers @{ 'Cache-Control'='no-cache'; 'Pragma'='no-cache' } $u | iex; exit 0 } "
+            "catch { Write-Host ('deploy url unreachable: ' + $u) } "
             '}; '
-            'throw \"all deploy urls failed, check FRP_MANAGER_PUBLIC_URL or manager_url.\""'
+            "throw 'all deploy urls failed, check FRP_MANAGER_PUBLIC_URL or manager_url.'\""
         )
 
     if len(normalized_urls) == 1:
