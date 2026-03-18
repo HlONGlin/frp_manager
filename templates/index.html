@@ -357,6 +357,22 @@
         </div>
     </div>
 
+    <div class="modal" id="linked-batch-result-modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3 id="linked-batch-result-title">批量操作结果</h3>
+                <button type="button" class="modal-close" id="close-linked-batch-result-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="hint" id="linked-batch-result-summary">完成 0/0</p>
+                <div class="linked-result-list" id="linked-batch-result-list"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="confirm-linked-batch-result-modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="toast-container" id="toast-container"></div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>

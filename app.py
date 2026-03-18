@@ -99,6 +99,7 @@ DEPLOY_SCRIPT_RATE_LIMIT = int(os.environ.get('FRP_DEPLOY_RATE_LIMIT', '30'))
 DEPLOY_SCRIPT_RATE_WINDOW = int(os.environ.get('FRP_DEPLOY_RATE_WINDOW_SEC', '60'))
 AGENT_PULL_RATE_LIMIT = int(os.environ.get('FRP_AGENT_PULL_RATE_LIMIT', '120'))
 AGENT_PULL_RATE_WINDOW = int(os.environ.get('FRP_AGENT_PULL_RATE_WINDOW_SEC', '60'))
+LINKED_STREAM_MAX_CONNECTIONS = int(os.environ.get('FRP_LINKED_STREAM_MAX_CONNECTIONS', '8'))
 
 app = Flask(__name__)
 configured_secret_key = str(os.environ.get('FRP_MANAGER_SECRET_KEY', '')).strip()
@@ -111,6 +112,8 @@ status_cache = {}
 status_cache_lock = threading.Lock()
 rate_limit_cache = {}
 rate_limit_lock = threading.Lock()
+linked_stream_active_connections = 0
+linked_stream_lock = threading.Lock()
 
 if not configured_secret_key and os.environ.get('FLASK_DEBUG', '0') != '1':
     print('[security] FRP_MANAGER_SECRET_KEY not set; sessions will be invalidated after restart.', file=sys.stderr)
@@ -165,6 +168,21 @@ def hit_rate_limit(scope, key, limit, window_seconds):
 
 def get_logged_in_user():
     return str(session.get(SESSION_USER_KEY, '')).strip()
+
+
+def try_acquire_linked_stream_slot():
+    global linked_stream_active_connections
+    with linked_stream_lock:
+        if LINKED_STREAM_MAX_CONNECTIONS > 0 and linked_stream_active_connections >= LINKED_STREAM_MAX_CONNECTIONS:
+            return False, linked_stream_active_connections
+        linked_stream_active_connections += 1
+        return True, linked_stream_active_connections
+
+
+def release_linked_stream_slot():
+    global linked_stream_active_connections
+    with linked_stream_lock:
+        linked_stream_active_connections = max(linked_stream_active_connections - 1, 0)
 
 
 def is_logged_in():
@@ -1605,19 +1623,36 @@ def linked_overview():
 
 @app.route('/api/linked/stream', methods=['GET'])
 def linked_stream():
+    acquired, active_connections = try_acquire_linked_stream_slot()
+    if not acquired:
+        return (
+            jsonify(
+                {
+                    'success': False,
+                    'message': f'实时连接数已达上限（{LINKED_STREAM_MAX_CONNECTIONS}），请关闭多余标签页后重试。',
+                    'limit': LINKED_STREAM_MAX_CONNECTIONS,
+                    'active': active_connections,
+                }
+            ),
+            429,
+        )
+
     interval = 3.0
 
     def stream_events():
         previous_payload = ''
-        while True:
-            payload_obj = get_linked_overview_snapshot(refresh=False)
-            payload = json.dumps(payload_obj, ensure_ascii=False, separators=(',', ':'))
-            if payload != previous_payload:
-                yield f'event: overview\ndata: {payload}\n\n'
-                previous_payload = payload
-            else:
-                yield 'event: heartbeat\ndata: {}\n\n'
-            time.sleep(interval)
+        try:
+            while True:
+                payload_obj = get_linked_overview_snapshot(refresh=False)
+                payload = json.dumps(payload_obj, ensure_ascii=False, separators=(',', ':'))
+                if payload != previous_payload:
+                    yield f'event: overview\ndata: {payload}\n\n'
+                    previous_payload = payload
+                else:
+                    yield 'event: heartbeat\ndata: {}\n\n'
+                time.sleep(interval)
+        finally:
+            release_linked_stream_slot()
 
     response = Response(stream_with_context(stream_events()), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-cache'

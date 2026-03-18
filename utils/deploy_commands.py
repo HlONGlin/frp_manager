@@ -256,7 +256,7 @@ fi
 set -euo pipefail
 
 mkdir -p /opt/frp && cd /opt/frp
-wget -O frps.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME}
+(command -v wget >/dev/null 2>&1 && wget -O frps.tar.gz {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME} || curl -fsSL {BASE_DOWNLOAD_URL}/{LINUX_PACKAGE_NAME} -o frps.tar.gz)
 tar -xzf frps.tar.gz
 cd {LINUX_FOLDER_NAME}
 FRPS_TOKEN={_shell_single_quote(server.get('token'))}
@@ -457,7 +457,7 @@ def build_frpc_deploy_script(server, port, system='linux', security_profile='bal
             "$ErrorActionPreference='Stop'; "
             "New-Item -ItemType Directory -Force 'frp' | Out-Null; "
             "Set-Location 'frp'; "
-            "Get-Process frpc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; "
+            f"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'frpc.exe' -and $_.CommandLine -like ('*{config_name}*') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}; "
             "$deployRoot=Join-Path (Get-Location).Path ('deploy_' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff')); "
             "New-Item -ItemType Directory -Force -Path $deployRoot | Out-Null; "
             "$zipPath=Join-Path $deployRoot 'frpc.zip'; "

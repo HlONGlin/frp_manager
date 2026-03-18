@@ -480,6 +480,10 @@ body {
     opacity: 0.5;
 }
 
+.linked-item.port-disabled {
+    opacity: 0.5;
+}
+
 .port-info {
     display: flex;
     align-items: center;
@@ -671,6 +675,37 @@ body {
 
 .linked-log-item.error {
     color: var(--error);
+}
+
+.linked-result-list {
+    max-height: 320px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--secondary);
+    padding: 8px;
+}
+
+.linked-result-item {
+    padding: 8px;
+    border-bottom: 1px dashed var(--border);
+    font-size: 0.84rem;
+}
+
+.linked-result-item:last-child {
+    border-bottom: 0;
+}
+
+.linked-result-item.success {
+    color: var(--success);
+}
+
+.linked-result-item.error {
+    color: var(--error);
+}
+
+.linked-result-item .linked-result-name {
+    font-weight: 600;
 }
 
 .empty-state {

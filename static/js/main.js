@@ -8,10 +8,13 @@ const state = {
     linkedStream: null,
     linkedStreamRetryTimer: null,
     linkedRealtimeActive: false,
+    linkedRealtimeEnabled: false,
+    openLinkedRealtimeStream: null,
     linkedActionBusy: new Set(),
     linkedActionLogs: [],
     linkedLogFilterServerId: '',
     linkedBatchBusy: false,
+    linkedBatchProgressHideTimer: null,
     linkedBatchProgress: {
         visible: false,
         processed: 0,
@@ -96,6 +99,7 @@ function initTabs() {
             if (panel) {
                 panel.classList.add('active');
             }
+            updateLinkedRealtimeState(tab.dataset.tab === 'linked');
         });
     });
 }
@@ -107,6 +111,7 @@ function initModals() {
     bindModalClose('system-select-modal', ['close-system-modal']);
     bindModalClose('deploy-modal', ['close-deploy-modal']);
     bindModalClose('console-actions-modal', ['close-console-actions-modal']);
+    bindModalClose('linked-batch-result-modal', ['close-linked-batch-result-modal', 'confirm-linked-batch-result-modal']);
 }
 
 function bindModalClose(modalId, triggerIds) {
@@ -567,7 +572,7 @@ async function loadServers(refresh = false) {
         const servers = await apiRequest(url);
         state.servers = Array.isArray(servers) ? servers : [];
         renderServers(state.servers);
-        if (!state.linkedRealtimeActive) {
+        if (refresh || !state.linkedRealtimeActive) {
             const loaded = await loadLinkedOverview(refresh, true);
             if (!loaded) {
                 syncLinkedFromServers();
@@ -657,6 +662,10 @@ function renderLinkedLogFilterOptions() {
         options.push(`<option value="${safeAttr(server.id)}">${safeHtml(server.name || server.id || '服务端')}</option>`);
     });
     select.innerHTML = options.join('');
+    const selected = String(state.linkedLogFilterServerId || '').trim();
+    if (selected && !servers.some((server) => String(server.id || '').trim() === selected)) {
+        state.linkedLogFilterServerId = '';
+    }
     select.value = String(state.linkedLogFilterServerId || '').trim();
 }
 
@@ -700,6 +709,10 @@ function applyLinkedBatchProgress() {
 }
 
 function setLinkedBatchProgress(visible, processed = 0, total = 0, label = '批量处理中') {
+    if (state.linkedBatchProgressHideTimer) {
+        window.clearTimeout(state.linkedBatchProgressHideTimer);
+        state.linkedBatchProgressHideTimer = null;
+    }
     state.linkedBatchProgress = {
         visible: Boolean(visible),
         processed: Number(processed || 0),
@@ -719,25 +732,42 @@ async function runLinkedBatchAction(serverId, items, label, runner) {
     let processed = 0;
     let okCount = 0;
     const failedNames = [];
+    const details = [];
 
     setLinkedBatchProgress(true, 0, total, label);
     try {
         for (const item of queue) {
             try {
                 const result = await runner(item);
-                if (result !== false) {
+                const ok = typeof result === 'object' && result !== null
+                    ? Boolean(result.ok)
+                    : result !== false;
+                const message = typeof result === 'object' && result !== null
+                    ? String(result.message || '').trim()
+                    : '';
+                if (ok) {
                     okCount += 1;
                 } else {
                     failedNames.push(String(item?.name || item?.id || '').trim());
                 }
+                details.push({
+                    name: String(item?.name || item?.id || '').trim() || String(item?.id || '').trim(),
+                    ok,
+                    message,
+                });
             } catch (_error) {
                 failedNames.push(String(item?.name || item?.id || '').trim());
+                details.push({
+                    name: String(item?.name || item?.id || '').trim() || String(item?.id || '').trim(),
+                    ok: false,
+                    message: '请求失败',
+                });
             }
             processed += 1;
             setLinkedBatchProgress(true, processed, total, label);
         }
     } finally {
-        window.setTimeout(() => setLinkedBatchProgress(false), 1200);
+        state.linkedBatchProgressHideTimer = window.setTimeout(() => setLinkedBatchProgress(false), 1200);
         state.linkedBatchBusy = false;
     }
 
@@ -747,7 +777,33 @@ async function runLinkedBatchAction(serverId, items, label, runner) {
         type: failed.length ? 'warning' : 'success',
         serverId,
     });
-    return { total, okCount, failedCount: Math.max(total - okCount, 0), failed };
+    return { total, okCount, failedCount: Math.max(total - okCount, 0), failed, details };
+}
+
+function showLinkedBatchResultModal(serverId, label, summary) {
+    const title = document.getElementById('linked-batch-result-title');
+    const summaryEl = document.getElementById('linked-batch-result-summary');
+    const listEl = document.getElementById('linked-batch-result-list');
+    if (!title || !summaryEl || !listEl) {
+        return;
+    }
+
+    title.textContent = `${label}结果`;
+    summaryEl.textContent = `服务端 ${serverId}：成功 ${summary.okCount}/${summary.total}，失败 ${summary.failedCount}`;
+    const details = Array.isArray(summary.details) ? summary.details : [];
+    if (!details.length) {
+        listEl.innerHTML = '<div class="linked-result-item">暂无明细</div>';
+    } else {
+        listEl.innerHTML = details
+            .map((item) => `
+                <div class="linked-result-item ${item.ok ? 'success' : 'error'}">
+                    <div class="linked-result-name">${safeHtml(item.name || '规则')}</div>
+                    <div>${safeHtml(item.ok ? '成功' : '失败')} ${safeHtml(item.message || '')}</div>
+                </div>
+            `)
+            .join('');
+    }
+    openModal('linked-batch-result-modal');
 }
 
 function setLinkedActionButtonBusy(button, busy) {
@@ -764,6 +820,15 @@ function setLinkedActionButtonBusy(button, busy) {
     button.disabled = false;
 }
 
+function isLinkedActionBusy(action, serverId = '', portId = '') {
+    const key = `${String(action || '').trim()}:${String(serverId || '').trim()}:${String(portId || '').trim()}`;
+    return state.linkedActionBusy.has(key);
+}
+
+function linkedActionDisabledAttr(action, serverId = '', portId = '') {
+    return isLinkedActionBusy(action, serverId, portId) ? ' disabled' : '';
+}
+
 function initLinkedRealtime() {
     if (typeof window.EventSource !== 'function') {
         setLinkedLiveStatus('浏览器不支持，使用轮询');
@@ -771,6 +836,9 @@ function initLinkedRealtime() {
     }
 
     const openStream = () => {
+        if (!state.linkedRealtimeEnabled) {
+            return;
+        }
         if (state.linkedStream) {
             try {
                 state.linkedStream.close();
@@ -792,6 +860,10 @@ function initLinkedRealtime() {
                     clients: Array.isArray(payload?.clients) ? payload.clients : [],
                 };
                 state.linkedRealtimeActive = true;
+                if (state.linkedStreamRetryTimer) {
+                    window.clearTimeout(state.linkedStreamRetryTimer);
+                    state.linkedStreamRetryTimer = null;
+                }
                 renderLinkedOverview();
                 setLinkedLiveStatus('已连接');
             } catch (_error) {
@@ -802,6 +874,10 @@ function initLinkedRealtime() {
 
         stream.addEventListener('heartbeat', () => {
             state.linkedRealtimeActive = true;
+            if (state.linkedStreamRetryTimer) {
+                window.clearTimeout(state.linkedStreamRetryTimer);
+                state.linkedStreamRetryTimer = null;
+            }
             setLinkedLiveStatus('已连接');
         });
 
@@ -817,12 +893,15 @@ function initLinkedRealtime() {
                 window.clearTimeout(state.linkedStreamRetryTimer);
             }
             state.linkedStreamRetryTimer = window.setTimeout(() => {
-                openStream();
+                if (state.linkedRealtimeEnabled) {
+                    openStream();
+                }
             }, 5000);
         };
     };
 
-    openStream();
+    state.openLinkedRealtimeStream = openStream;
+    updateLinkedRealtimeState(false);
 
     window.addEventListener('beforeunload', () => {
         if (state.linkedStream) {
@@ -833,6 +912,33 @@ function initLinkedRealtime() {
             }
         }
     });
+}
+
+function updateLinkedRealtimeState(enabled) {
+    const shouldEnable = Boolean(enabled);
+    state.linkedRealtimeEnabled = shouldEnable;
+
+    if (!shouldEnable) {
+        state.linkedRealtimeActive = false;
+        if (state.linkedStreamRetryTimer) {
+            window.clearTimeout(state.linkedStreamRetryTimer);
+            state.linkedStreamRetryTimer = null;
+        }
+        if (state.linkedStream) {
+            try {
+                state.linkedStream.close();
+            } catch (_error) {
+                state.linkedStream = null;
+            }
+            state.linkedStream = null;
+        }
+        setLinkedLiveStatus('仅联动页连接');
+        return;
+    }
+
+    if (!state.linkedStream && typeof state.openLinkedRealtimeStream === 'function') {
+        state.openLinkedRealtimeStream();
+    }
 }
 
 async function loadLinkedOverview(refresh = false, silent = true) {
@@ -939,11 +1045,11 @@ function renderLinkedServerItem(server) {
             <div class="server-address">${safeHtml(serverAddr || '待部署后自动识别')} : ${safeHtml(server.server_port)}</div>
             <div class="linked-meta">规则总数 ${safeHtml(server.ports_total)} / 启用 ${safeHtml(server.ports_enabled)}</div>
             <div class="linked-actions">
-                <button class="btn btn-xs btn-secondary" data-linked-action="linked-server-check" data-server-id="${serverId}">检查服务端</button>
-                <button class="btn btn-xs btn-secondary" data-linked-action="linked-server-check-clients" data-server-id="${serverId}">检查客户端</button>
-                <button class="btn btn-xs btn-warning" data-linked-action="linked-server-shutdown" data-server-id="${serverId}">一键关闭</button>
-                <button class="btn btn-xs btn-outline" data-linked-action="linked-server-edit" data-server-id="${serverId}">修改端口</button>
-                <button class="btn btn-xs btn-danger" data-linked-action="linked-server-delete" data-server-id="${serverId}">删除数据</button>
+                <button class="btn btn-xs btn-secondary" data-linked-action="linked-server-check" data-server-id="${serverId}"${linkedActionDisabledAttr('linked-server-check', server.id)}>检查服务端</button>
+                <button class="btn btn-xs btn-secondary" data-linked-action="linked-server-check-clients" data-server-id="${serverId}"${linkedActionDisabledAttr('linked-server-check-clients', server.id)}>检查客户端</button>
+                <button class="btn btn-xs btn-warning" data-linked-action="linked-server-shutdown" data-server-id="${serverId}"${linkedActionDisabledAttr('linked-server-shutdown', server.id)}>一键关闭</button>
+                <button class="btn btn-xs btn-outline" data-linked-action="linked-server-edit" data-server-id="${serverId}"${linkedActionDisabledAttr('linked-server-edit', server.id)}>修改端口</button>
+                <button class="btn btn-xs btn-danger" data-linked-action="linked-server-delete" data-server-id="${serverId}"${linkedActionDisabledAttr('linked-server-delete', server.id)}>删除数据</button>
             </div>
         </div>
     `;
@@ -971,11 +1077,11 @@ function renderLinkedClientItem(client) {
             <div class="port-mapping">${mapping}</div>
             <div class="linked-meta">${checkText}</div>
             <div class="linked-actions">
-                <button class="btn btn-xs btn-warning" data-linked-action="linked-client-stop" data-server-id="${serverId}" data-port-id="${clientId}">一键关闭</button>
-                <button class="btn btn-xs btn-secondary" data-linked-action="linked-client-check" data-server-id="${serverId}" data-port-id="${clientId}">检查端口</button>
-                <button class="btn btn-xs btn-outline" data-linked-action="linked-client-edit" data-server-id="${serverId}" data-port-id="${clientId}">修改端口</button>
-                <button class="btn btn-xs btn-outline" data-linked-action="linked-client-command" data-server-id="${serverId}" data-port-id="${clientId}">链接调用</button>
-                <button class="btn btn-xs btn-danger" data-linked-action="linked-client-delete" data-server-id="${serverId}" data-port-id="${clientId}">删除数据</button>
+                <button class="btn btn-xs btn-warning" data-linked-action="linked-client-stop" data-server-id="${serverId}" data-port-id="${clientId}"${linkedActionDisabledAttr('linked-client-stop', client.server_id, client.id)}>一键关闭</button>
+                <button class="btn btn-xs btn-secondary" data-linked-action="linked-client-check" data-server-id="${serverId}" data-port-id="${clientId}"${linkedActionDisabledAttr('linked-client-check', client.server_id, client.id)}>检查端口</button>
+                <button class="btn btn-xs btn-outline" data-linked-action="linked-client-edit" data-server-id="${serverId}" data-port-id="${clientId}"${linkedActionDisabledAttr('linked-client-edit', client.server_id, client.id)}>修改端口</button>
+                <button class="btn btn-xs btn-outline" data-linked-action="linked-client-command" data-server-id="${serverId}" data-port-id="${clientId}"${linkedActionDisabledAttr('linked-client-command', client.server_id, client.id)}>链接调用</button>
+                <button class="btn btn-xs btn-danger" data-linked-action="linked-client-delete" data-server-id="${serverId}" data-port-id="${clientId}"${linkedActionDisabledAttr('linked-client-delete', client.server_id, client.id)}>删除数据</button>
             </div>
         </div>
     `;
@@ -1028,10 +1134,11 @@ function initLinkedActionDelegation() {
                     '客户端关闭',
                     async (client) => {
                         await apiRequest(`/api/linked/client/${serverId}/${client.id}/shutdown`, { method: 'POST' });
-                        return true;
+                        return { ok: true, message: '已关闭' };
                     }
                 );
                 showToast(`客户端关闭完成：成功 ${summary.okCount} / 总数 ${summary.total}`, summary.failedCount ? 'warning' : 'success');
+                showLinkedBatchResultModal(serverId, '客户端批量关闭', summary);
                 await loadServers(true);
                 return;
             }
@@ -1057,10 +1164,11 @@ function initLinkedActionDelegation() {
                     '客户端检测',
                     async (client) => {
                         const data = await apiRequest(`/api/linked/client/${serverId}/${client.id}/check`, { method: 'POST' });
-                        return Boolean(data.ok);
+                        return { ok: Boolean(data.ok), message: String(data.message || '').trim() };
                     }
                 );
                 showToast(`客户端检测完成：可用 ${summary.okCount} / 总数 ${summary.total}`, summary.failedCount ? 'warning' : 'success');
+                showLinkedBatchResultModal(serverId, '客户端批量检测', summary);
                 await loadServers(true);
                 return;
             }

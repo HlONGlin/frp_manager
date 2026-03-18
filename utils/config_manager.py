@@ -247,7 +247,8 @@ def load_config() -> dict[str, Any]:
                 raw = json.load(handle)
         except (OSError, json.JSONDecodeError):
             # Preserve broken data for manual recovery and reset to a healthy default.
-            backup_path = CONFIG_FILE.with_suffix(f"{CONFIG_FILE.suffix}.bak")
+            timestamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+            backup_path = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.{timestamp}.bak")
             try:
                 os.replace(CONFIG_FILE, backup_path)
             except OSError:
