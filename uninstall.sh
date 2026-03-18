@@ -130,6 +130,7 @@ main() {
   remove_service_files
   remove_all_data_dirs
   log "Uninstall complete. All controller data directories have been removed."
+  warn "如果你当前 shell 仍停留在已删除目录，请先执行：cd /"
 }
 
 main "$@"

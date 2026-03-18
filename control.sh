@@ -18,7 +18,56 @@ SCRIPT_PATH="$(resolve_script_path)"
 if [[ "$SCRIPT_PATH" == "bash" || "$SCRIPT_PATH" == "-bash" || "$SCRIPT_PATH" == "sh" || "$SCRIPT_PATH" == "-sh" ]]; then
   SCRIPT_PATH="."
 fi
-APP_DIR="$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd || pwd)"
+
+recover_invalid_cwd() {
+  local fallback_dir=""
+  if pwd >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "$SCRIPT_PATH" = /* ]]; then
+    fallback_dir="$(dirname "$SCRIPT_PATH")"
+  fi
+
+  if [[ -n "$fallback_dir" && -d "$fallback_dir" ]] && cd "$fallback_dir" 2>/dev/null; then
+    printf '[%s] 警告: 检测到当前工作目录已失效，已自动切换到脚本目录：%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$fallback_dir" >&2
+    return 0
+  fi
+
+  if [[ -d /tmp ]] && cd /tmp 2>/dev/null; then
+    printf '[%s] 警告: 检测到当前工作目录已失效，已自动切换到 /tmp 继续执行。\n' "$(date '+%Y-%m-%d %H:%M:%S')" >&2
+    return 0
+  fi
+
+  cd / 2>/dev/null || true
+  printf '[%s] 警告: 检测到当前工作目录已失效，已自动切换到 / 继续执行。\n' "$(date '+%Y-%m-%d %H:%M:%S')" >&2
+}
+
+resolve_app_dir() {
+  local dir_candidate=""
+  if [[ "$SCRIPT_PATH" = /* ]]; then
+    dir_candidate="$(dirname "$SCRIPT_PATH")"
+    if [[ -d "$dir_candidate" ]]; then
+      printf '%s\n' "$dir_candidate"
+      return 0
+    fi
+  fi
+
+  if dir_candidate="$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd)"; then
+    printf '%s\n' "$dir_candidate"
+    return 0
+  fi
+
+  if pwd >/dev/null 2>&1; then
+    pwd
+    return 0
+  fi
+
+  printf '/\n'
+}
+
+recover_invalid_cwd
+APP_DIR="$(resolve_app_dir)"
 ENV_FILE="$APP_DIR/config.env"
 BACKUP_DIR="$APP_DIR/backups"
 SERVICE_NAME="frp-manager"
